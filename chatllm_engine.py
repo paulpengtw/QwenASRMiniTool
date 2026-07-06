@@ -955,6 +955,7 @@ class ChatLLMASREngine:
         from subtitle_lines import write_transcript
 
         audio, _ = load_audio_16k_mono(audio_path, SAMPLE_RATE)
+        self._last_segments_rich = None   # 本次字級結果（卡拉OK側通道）
 
         # ── 分段策略：說話者分離 vs 傳統 VAD（與 ASREngine 一致）────
         use_diar = diarize and self.diar_engine is not None and self.diar_engine.ready
@@ -996,6 +997,7 @@ class ChatLLMASREngine:
                 pass
 
         all_subs: list[tuple[float, float, str, str | None]] = []
+        all_rich: list[dict] = []    # 與 all_subs 平行的字級結構（卡拉OK用）
         total = len(groups_spk)
         for i, (g0, g1, chunk, spk) in enumerate(groups_spk):
             if progress_cb:
@@ -1037,10 +1039,13 @@ class ChatLLMASREngine:
                         if ts_items:
                             subs = _ts_fn(
                                 ts_items, raw_text, g0, spk,
-                                self.cc, _output_simplified,
+                                self.cc, _output_simplified, with_words=True,
                             )
                             if subs:
-                                all_subs.extend(subs)
+                                for (s, e, t, sp, words) in subs:
+                                    all_subs.append((s, e, t, sp))
+                                    all_rich.append({"start": s, "end": e, "text": t,
+                                                     "speaker": sp, "words": words})
                                 aligned = True
                     except Exception:
                         aligned = False
@@ -1059,12 +1064,16 @@ class ChatLLMASREngine:
                 if self.cc and not _output_simplified:
                     text = self.cc.convert(raw_text)
                 lines = _split_to_lines(text)
-                all_subs.extend(
-                    (s, e, line, spk) for s, e, line in _assign_ts(lines, g0, g1)
-                )
+                for s, e, line in _assign_ts(lines, g0, g1):
+                    all_subs.append((s, e, line, spk))
+                    all_rich.append({"start": s, "end": e, "text": line,
+                                     "speaker": spk, "words": []})   # 無對齊 → 前端內插
 
         if not all_subs:
             return None
+
+        # 字級結果掛上實例（卡拉OK逐字高亮）
+        self._last_segments_rich = all_rich
 
         if progress_cb:
             progress_cb(total, total, "寫入字幕…")

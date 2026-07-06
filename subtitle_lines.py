@@ -131,6 +131,53 @@ def _merge_orphan_lines(
     return merged
 
 
+def _merge_orphan_lines_rich(
+    lines: list[tuple],
+    min_chars: int = 1,
+    max_gap: float = 0.8,
+) -> list[tuple]:
+    """`_merge_orphan_lines` 的 5-tuple 版（卡拉OK字級用）。
+
+    行為與 4-tuple 版完全相同（同樣的孤兒判定、間隔/說話者條件），差別只在
+    併行時連同第 5 元素 ``words`` 字級清單一起串接，使字幕卡與卡拉OK逐字
+    高亮的斷句保持一致。
+    """
+    if not lines:
+        return lines
+
+    def _has_latin(t: str) -> bool:
+        return any(c.isascii() and c.isalpha() for c in t)
+
+    def _vlen(t: str) -> int:
+        return len(t.replace(" ", ""))
+
+    def _is_orphan(t: str) -> bool:
+        return (not _has_latin(t)) and 0 < _vlen(t) <= min_chars
+
+    def _join(a: str, b: str) -> str:
+        sep = " " if (_has_latin(a) or _has_latin(b)) else ""
+        return f"{a}{sep}{b}"
+
+    merged: list[tuple] = []
+    for (s, e, t, spk, w) in lines:
+        if (_is_orphan(t) and merged
+                and merged[-1][3] == spk
+                and s - merged[-1][1] <= max_gap):
+            ps, _pe, pt, pspk, pw = merged[-1]
+            merged[-1] = (ps, e, _join(pt, t), pspk, pw + w)
+        else:
+            merged.append((s, e, t, spk, w))
+
+    if len(merged) >= 2 and _is_orphan(merged[0][2]):
+        s0, _e0, t0, spk0, w0 = merged[0]
+        s1, e1, t1, spk1, w1 = merged[1]
+        if spk0 == spk1 and s1 - merged[0][1] <= max_gap:
+            merged[1] = (s0, e1, _join(t0, t1), spk1, w0 + w1)
+            merged.pop(0)
+
+    return merged
+
+
 def _ts_chatllm_to_subtitle_lines(
     ts_items,
     raw_text: str,
@@ -139,7 +186,8 @@ def _ts_chatllm_to_subtitle_lines(
     cc,
     simplified: bool,
     break_on_space: bool = False,
-) -> list[tuple[float, float, str, str | None]]:
+    with_words: bool = False,
+):
     """字級 (word, start_sec, end_sec) + ASR 原文 → 字幕行。
 
     標點切行 + MAX_CHARS/MAX_WORDS 保護；word_list 直接取自字級時間軸，
@@ -150,17 +198,32 @@ def _ts_chatllm_to_subtitle_lines(
         break_on_space: True 時把 raw_text 的「空白」也當切點。
             用於 Whisper（無標點，但以空白標記語句邊界）→ 等同 Qwen 在標點切，
             逼近 Qwen 斷句品質。Qwen/chatllm 路徑維持 False（空白僅分隔拉丁詞）。
+        with_words: True 時每行多帶一個 ``words`` 字級清單（卡拉OK逐字高亮用），
+            回傳 5-tuple ``(start, end, text, spk, words)``；
+            ``words = [{"start": 秒, "end": 秒, "text": 顯示字}, ...]``。
+            預設 False → 維持既有 4-tuple 行為（SRT/批次/端點完全不受影響）。
+
+    回傳：
+        with_words=False → list[(start, end, text, spk)]
+        with_words=True  → list[(start, end, text, spk, words)]
     """
     _all_punct = _ZH_CLAUSE_END | _EN_SENT_END
     MAX_WORDS    = 8
     MAX_ZH_CHARS = MAX_CHARS
-    result: list[tuple[float, float, str, str | None]] = []
+    # 內部一律以 5-tuple (start, end, text, spk, words) 累積，回傳前依 with_words 決定保留與否
+    result: list[tuple] = []
 
     if not ts_items or not raw_text.strip():
         return result
 
     word_list = [w for (w, _s, _e) in ts_items]
     n = len(ts_items)
+
+    # 繁化：text（整行）沿用既有「整行轉換」確保 SRT 輸出零變化；
+    # words[].text 走「逐字轉換」（卡拉OK高亮單位）——兩者在極少數 s2twp
+    # 詞組轉換情境可能有細微差異，但卡拉OK檢視只讀 words，不影響字幕卡/SRT。
+    def _conv(s: str) -> str:
+        return cc.convert(s) if (not simplified and cc is not None) else s
 
     seg_idx:   list[int] = []   # 當前行的 ts_items 索引
     seg_words: list[str] = []   # 當前行的原始 word
@@ -180,10 +243,16 @@ def _ts_chatllm_to_subtitle_lines(
             text = " ".join(seg_words)
         else:
             text = "".join(seg_words)
-        if not simplified and cc is not None:
-            text = cc.convert(text)
+        text = _conv(text)
+        # 字級清單：每個 ts_item → 一個高亮單位（中文＝單字、拉丁＝整詞）
+        words = [
+            {"start": chunk_offset + ts_items[k][1],
+             "end":   chunk_offset + ts_items[k][2],
+             "text":  _conv(word_list[k])}
+            for k in seg_idx
+        ]
         if end > start and text.strip():
-            result.append((start, end, text.strip(), spk))
+            result.append((start, end, text.strip(), spk, words))
         seg_idx = []; seg_words = []
 
     def _over_limit() -> bool:
@@ -225,4 +294,7 @@ def _ts_chatllm_to_subtitle_lines(
             _emit()
 
     _emit()
-    return _merge_orphan_lines(result)
+    merged = _merge_orphan_lines_rich(result)
+    if with_words:
+        return merged
+    return [(s, e, t, spk) for (s, e, t, spk, _w) in merged]

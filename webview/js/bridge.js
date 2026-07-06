@@ -226,7 +226,7 @@
   const MOCK = {
     cancelled: false,
     status: { modelReady: true, backend: "GPU · CRISPASR（Vulkan）", device: "NVIDIA GeForce RTX", version: "webview 0.1", appName: "聲音辨識小工具", hasAnyModel: false, selectedReady: false },
-    settings: { scale: 100, format: "srt", vocab: "s2twp", mirror: "", ffmpeg: "", theme: "light", uiLang: "繁體中文", vad: 0.5 },
+    settings: { scale: 100, format: "srt", vocab: "s2twp", mirror: "", ffmpeg: "", theme: "light", uiLang: "繁體中文", vad: 0.5, chunkSecs: 0 },
     endpoint: { running: true, host: "192.168.1.20", port: 11435, key: "k_8x2pf3qd7m1c", url: "" },
     tunnel: { running: false, url: "", status: "" },
     devices: {
@@ -305,6 +305,17 @@
     ],
   };
   MOCK.endpoint.url = `http://${MOCK.endpoint.host}:${MOCK.endpoint.port}/?k=${MOCK.endpoint.key}`;
+
+  // mock 字級：把每行文字（去標點）平均灑進該行時間，近似 FA 字級時間軸，
+  // 讓卡拉OK模式在純展示（file:// / 無後端）下也能完整預覽。真實後端回的
+  // words 為 FA 不等距時間，但前端渲染只讀 words → mock 與實機同一條路徑。
+  MOCK.segments.forEach(s => {
+    const chars = [...s.text].filter(c => !"，。？！；：、…—·".includes(c));
+    const dur = chars.length ? (s.end - s.start) / chars.length : 0;
+    s.words = chars.map((ch, i) => ({
+      start: s.start + i * dur, end: s.start + (i + 1) * dur, text: ch,
+    }));
+  });
 
   async function mockTranscribe() {
     MOCK.cancelled = false;

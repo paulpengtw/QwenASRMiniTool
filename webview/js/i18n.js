@@ -96,6 +96,8 @@
     "set.fmtTxt": ["純文字", "纯文本", "Plain text"],
     "set.vad": ["語音偵測靈敏度（VAD）", "语音检测灵敏度（VAD）", "Voice detection (VAD)"],
     "set.vadDesc": ["降低閾值可減少漏識（被當成空白的片段可能有聲音）；提高則減少假陽性。預設 0.50", "降低阈值可减少漏识（被当成空白的片段可能有声音）；提高则减少假阳性。默认 0.50", "Lower threshold reduces misses; higher reduces false positives. Default 0.50"],
+    "set.chunk": ["每段最長秒數（字級對齊）", "每段最长秒数（字级对齐）", "Max chunk seconds (alignment)"],
+    "set.chunkDesc": ["調短可減少長段歌詞／語音「段尾字級逐漸跑掉、換段才歸位」的漂移。實際上限依模型自動夾低（0.6B 30s、1.7B 10s）；CrispASR 走自身視窗，不受此設定影響。", "调短可减少长段歌词／语音「段尾字级逐渐跑掉、换段才归位」的漂移。实际上限依模型自动夹低（0.6B 30s、1.7B 10s）；CrispASR 走自身窗口，不受此设定影响。", "Shorter chunks reduce word-timing drift toward the end of long sung/spoken segments. The cap is auto-limited per model (0.6B 30s, 1.7B 10s); CrispASR uses its own window and is unaffected."],
     "set.vocab": ["簡繁詞彙轉換", "简繁词汇转换", "Chinese variant"],
     "set.vocabDesc": ["把模型輸出轉成在地用語", "把模型输出转成本地用语", "Localize model output wording"],
     "set.vocabOff": ["關閉", "关闭", "Off"],

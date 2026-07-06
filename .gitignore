@@ -117,6 +117,8 @@ UI.txt
 !assets/icon.png
 !webview/favicon.png
 
-# ── 允許 Readme 資料夾內的截圖 ─────────────────────────
+# ── 允許 Readme 資料夾內的截圖（含 webview 子資料夾）──────
 !Readme/*.jpg
 !Readme/*.png
+!Readme/webview/*.jpg
+!Readme/webview/*.png

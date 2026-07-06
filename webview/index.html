@@ -126,8 +126,16 @@
               <button class="play-btn play-btn-ghost" id="wave-stop" aria-label="停止">
                 <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
               </button>
+              <button class="play-btn play-btn-ghost" id="btn-karaoke" aria-label="卡拉OK模式" title="卡拉OK模式（逐字高亮）">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4"/></svg>
+              </button>
               <span class="play-time"><span id="wave-cur">00:00</span> · 點波形、字幕或下方區塊可跳播</span>
             </div>
+          </div>
+          <!-- 卡拉OK舞台：逐字高亮放大跳動（由字級 words 驅動）。預設隱藏，按麥克風鈕切換。 -->
+          <div class="karaoke" id="karaoke" hidden>
+            <div class="kara-line" id="kara-line"></div>
+            <div class="kara-next" id="kara-next"></div>
           </div>
           <div class="subs" id="subs"></div>
         </div>
@@ -287,6 +295,8 @@
             <div class="seg" id="set-format"><button class="on" data-v="srt" data-i18n="set.fmtSrt">SRT 字幕</button><button data-v="txt" data-i18n="set.fmtTxt">純文字</button></div></div>
           <div class="row"><div class="label"><div class="t" data-i18n="set.vad">語音偵測靈敏度（VAD）</div><div class="d" data-i18n="set.vadDesc">降低閾值可減少漏識（被當成空白的片段可能有聲音）；提高則減少假陽性。預設 0.50</div></div>
             <input type="range" class="slider" id="set-vad" min="0.30" max="0.80" step="0.01" value="0.50"><span class="slider-val" id="set-vad-val">0.50</span></div>
+          <div class="row"><div class="label"><div class="t" data-i18n="set.chunk">每段最長秒數（字級對齊）</div><div class="d" data-i18n="set.chunkDesc">調短可減少長段歌詞／語音「段尾字級逐漸跑掉、換段才歸位」的漂移。實際上限依模型自動夾低（0.6B 30s、1.7B 10s）；CrispASR 走自身視窗，不受此設定影響。</div></div>
+            <input type="range" class="slider" id="set-chunk" min="5" max="30" step="1" value="30"><span class="slider-val" id="set-chunk-val">30s</span></div>
           <div class="row"><div class="label"><div class="t" data-i18n="set.vocab">簡繁詞彙轉換</div><div class="d" data-i18n="set.vocabDesc">把模型輸出轉成在地用語</div></div>
             <div class="seg" id="set-vocab"><button data-v="off" data-i18n="set.vocabOff">關閉</button><button class="on" data-v="s2twp" data-i18n="set.vocabTW">台灣用語</button><button data-v="s2t" data-i18n="set.vocabStd">標準</button></div></div>
           <div class="row"><div class="label"><div class="t" data-i18n="set.mirror">HuggingFace 鏡像站</div><div class="d" data-i18n="set.mirrorDesc">下載模型較慢時可改用鏡像</div></div>

@@ -158,6 +158,7 @@
   async function renderResult(segments) {
     $("#result").hidden = false;
     curSegs = segments;
+    _karaCache = null;                      // 新結果 → 重建卡拉OK字級（段落索引已變）
     cleanupAudio();
 
     const file = picked && (picked.file || (picked instanceof Blob ? picked : null));
@@ -283,6 +284,8 @@
       const val = (txt.textContent || "").trim();
       if (save && val && val !== orig) {
         curSegs[idx].text = val; txt.textContent = val;
+        curSegs[idx].words = reflowWords(curSegs[idx], val);  // 卡拉OK字級跟著修正
+        _karaCache = null;                                    // 失效快取 → 下次重繪該行
         const blk = $(`.seg-block[data-seg="${idx}"]`);
         if (blk) { blk.textContent = val; blk.title = val; }
       } else {
@@ -345,6 +348,121 @@
     if (audioUrl) { try { URL.revokeObjectURL(audioUrl); } catch (e) {} audioUrl = null; }
     audioEl = null;
   }
+
+  // ════ 卡拉OK模式（逐字高亮放大跳動，由字級 words 驅動）════
+  //   另開 requestAnimationFrame 迴圈（60fps）讀 audioEl.currentTime，逐字更新，
+  //   比 <audio> timeupdate（~4fps）順得多。資料源：curSegs[].words（後端 FA 字級；
+  //   無對齊時 wordsForSeg 以行時間平均內插）。
+  let karaokeOn = false, karaokeRAF = 0, _karaCache = null;   // _karaCache: {idx, words, spans}
+
+  /**
+   * 卡拉OK逐字狀態：給「該行字級 words」與「目前播放秒數 t」，回傳與 words 等長的
+   * 狀態陣列，每元素 { sung, active, scale }：
+   *   sung   已唱過（t 已過該字 end）→ CSS .sung 填主題色
+   *   active 正在唱（t 落在該字 [start,end)）→ CSS .active 高亮
+   *   scale  1=原始大小；>1=放大（updateKaraoke 會映射成 transform：放大 + 微上抬）
+   *
+   * 目前 sung/active 已實作（KTV 式逐字填色已可運作）。放大跳動曲線留給你 ——
+   * 這是「逐字放大跳動」效果的核心，也是最有設計選擇的一段。
+   */
+  function karaokeCharStates(words, t) {
+    return words.map(w => {
+      const sung = t >= w.end;
+      const active = t >= w.start && t < w.end;
+      let scale = 1;
+      // ── TODO（你來寫）：放大跳動曲線（5~8 行）──────────────────────────
+      //   目標：字被唱到的瞬間「彈」一下再回落（Apple Music 動態歌詞風）。
+      //   手上的量：w.start / w.end（該字時間窗）、t（目前秒數）、active。
+      //   設計空間（任選或自創）：
+      //     • 進度 p = (t - w.start) / (w.end - w.start)，clamp 0..1
+      //     • 起跳即最大、唱完歸位： if (active) scale = 1 + 0.25 * (1 - p)
+      //     • 預備動作：在 w.start 前 ~0.1s 先微幅放大（anticipation）
+      //     • 建議上限 scale ≤ 1.3，避免整行版面抖動過猛
+      //   （把你的曲線寫進 scale 即可，其餘渲染/映射都已接好。）
+      // ──────────────────────────────────────────────────────────────────
+      return { sung, active, scale };
+    });
+  }
+
+  // 卡拉OK高亮單位：去空白與標點（與後端 FA words 慣例一致，標點不單獨成一拍）。
+  const _KARA_PUNCT = "，。？！；：、…—·,.!?;:";
+  function karaokeUnits(text) {
+    return [...(text || "")].filter(c => c.trim() && !_KARA_PUNCT.includes(c));
+  }
+  // 把某段 chars 依行時間平均內插成 words（無 FA、或編輯後字數改變時用）。
+  function interpWords(seg, units) {
+    const dur = units.length ? (seg.end - seg.start) / units.length : 0;
+    return units.map((ch, i) => ({ start: seg.start + i * dur, end: seg.start + (i + 1) * dur, text: ch }));
+  }
+  // 取某段字級 words；後端未對齊（words 空）→ 行時間平均內插（時間為估計值）。
+  function wordsForSeg(seg) {
+    if (seg.words && seg.words.length) return seg.words;
+    return interpWords(seg, karaokeUnits(seg.text));
+  }
+  // 行內校對後同步卡拉OK字級：字數不變（多為單字修正）→ 保留原 FA 時間只換字；
+  // 字數改變 → 該行 FA 已不對應，改以行時間平均重灑。回傳新 words。
+  function reflowWords(seg, newText) {
+    const units = karaokeUnits(newText);
+    const old = seg.words || [];
+    if (old.length && old.length === units.length) {
+      return old.map((w, i) => ({ start: w.start, end: w.end, text: units[i] }));
+    }
+    return interpWords(seg, units);
+  }
+
+  // 把某段渲染成一排 .kara-char span，回傳 {words, spans}（spans 與 words 等長）。
+  function renderKaraokeLine(idx) {
+    const seg = curSegs[idx], line = $("#kara-line");
+    line.innerHTML = "";
+    const words = wordsForSeg(seg), spans = [];
+    words.forEach(w => {
+      const span = document.createElement("span");
+      span.className = "kara-char"; span.textContent = w.text;
+      line.appendChild(span); spans.push(span);
+      if (/[a-z]/i.test(w.text)) {                 // 拉丁詞後補空白格
+        const sp = document.createElement("span"); sp.className = "kara-char space"; line.appendChild(sp);
+      }
+    });
+    const next = curSegs[idx + 1];
+    $("#kara-next").textContent = next ? next.text : "";
+    return { words, spans };
+  }
+
+  // 每幀更新：定位目前段 → （換段才重繪）→ 算每字狀態 → 套用 transform。
+  function updateKaraoke(t) {
+    if (!curSegs.length) return;
+    let idx = curSegs.findIndex(s => t >= s.start && t < s.end);
+    if (idx < 0) idx = _karaCache ? _karaCache.idx : 0;   // 空隙：停在上一段（唱完狀態）
+    if (!_karaCache || _karaCache.idx !== idx) {
+      const built = renderKaraokeLine(idx);
+      _karaCache = { idx, words: built.words, spans: built.spans };
+    }
+    const { words, spans } = _karaCache;
+    const states = karaokeCharStates(words, t);          // ← 使用者實作的高亮曲線
+    for (let i = 0; i < spans.length; i++) {
+      const st = states[i] || {};
+      spans[i].classList.toggle("sung", !!st.sung);
+      spans[i].classList.toggle("active", !!st.active);
+      const sc = +st.scale || 1;
+      // scale→transform：放大同時微微上抬（跳動感）。視覺映射固定於此，曲線由 states 決定。
+      spans[i].style.transform = sc === 1 ? "" : `translateY(${((sc - 1) * -12).toFixed(1)}px) scale(${sc.toFixed(3)})`;
+    }
+  }
+
+  function karaokeTick() {
+    if (!karaokeOn) return;
+    updateKaraoke(audioEl ? audioEl.currentTime : 0);
+    karaokeRAF = requestAnimationFrame(karaokeTick);
+  }
+  function setKaraoke(on) {
+    karaokeOn = on;
+    $("#karaoke").hidden = !on;
+    $("#subs").hidden = on;
+    $("#btn-karaoke").classList.toggle("kara-on", on);
+    cancelAnimationFrame(karaokeRAF);
+    if (on) { _karaCache = null; karaokeTick(); }
+  }
+  $("#btn-karaoke") && $("#btn-karaoke").addEventListener("click", () => setKaraoke(!karaokeOn));
 
   $("#btn-open-dir").addEventListener("click", () => API.openOutputDir());
 
@@ -781,6 +899,9 @@
     $("#set-mirror").value = s.mirror || "";
     $("#set-ffmpeg").value = s.ffmpeg || "";
     if (s.vad != null) { $("#set-vad").value = s.vad; $("#set-vad-val").textContent = (+s.vad).toFixed(2); }
+    // 每段最長秒數：0/未設 → 視為上限（slider 顯示 30，後端依模型夾低）
+    const cs = (+s.chunkSecs > 0) ? +s.chunkSecs : 30;
+    if ($("#set-chunk")) { $("#set-chunk").value = cs; $("#set-chunk-val").textContent = cs + "s"; }
     // 介面語言：選單回填 + 套用 i18n（含目前視圖標題）
     const uiLang = s.uiLang || "繁體中文";
     if ([...$("#set-lang").options].some(o => o.value === uiLang)) $("#set-lang").value = uiLang;
@@ -795,6 +916,9 @@
   });
   $("#set-vad").addEventListener("input", e => {
     const v = +e.target.value; $("#set-vad-val").textContent = v.toFixed(2); API.setSettings({ vad: v });
+  });
+  $("#set-chunk") && $("#set-chunk").addEventListener("input", e => {
+    const v = +e.target.value; $("#set-chunk-val").textContent = v + "s"; API.setSettings({ chunkSecs: v });
   });
   // segmented 控制：點擊切換 + 回寫設定
   [["#set-format", "format"], ["#set-vocab", "vocab"], ["#set-theme", "theme"]].forEach(([sel, key]) => {

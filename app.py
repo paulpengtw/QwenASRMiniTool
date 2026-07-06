@@ -762,6 +762,7 @@ class ASREngine:
         audio, _ = load_audio_16k_mono(audio_path, SAMPLE_RATE)
         self._deg_count = 0          # 本次退化（異常）輸出段數
         self._last_vad_diag = None   # 本次「未產生字幕」的明確原因
+        self._last_segments_rich = None  # 本次字級結果（卡拉OK用，側通道；無對齊則 words=[]）
 
         # ── 分段策略：說話者分離 vs 傳統 VAD ─────────────────────────
         # groups_spk: [(g0_sec, g1_sec, audio_chunk, speaker_label | None), ...]
@@ -797,6 +798,7 @@ class ASREngine:
 
         # ── ASR 逐段轉錄 ─────────────────────────────────────────────
         all_subs: list[tuple[float, float, str, str | None]] = []
+        all_rich: list[dict] = []    # 與 all_subs 平行的字級結構（卡拉OK用）
         total = len(groups_spk)
         for i, (g0, g1, chunk, spk) in enumerate(groups_spk):
             if progress_cb:
@@ -871,10 +873,13 @@ class ASREngine:
                     if ts_items:
                         subs = _ts_chatllm_to_subtitle_lines(
                             ts_items, raw_text, g0, spk,
-                            self.cc, _g_output_simplified,
+                            self.cc, _g_output_simplified, with_words=True,
                         )
                         if subs:
-                            all_subs.extend(subs)
+                            for (s, e, t, sp, words) in subs:
+                                all_subs.append((s, e, t, sp))
+                                all_rich.append({"start": s, "end": e, "text": t,
+                                                 "speaker": sp, "words": words})
                             aligned = True
                 except Exception:
                     aligned = False  # 靜默 fallback 到比例估算
@@ -888,9 +893,10 @@ class ASREngine:
                 # ── 比例估算 Fallback ──────────────────────────────────────
                 text = raw_text if _g_output_simplified else self.cc.convert(raw_text)
                 lines = _split_to_lines(text)
-                all_subs.extend(
-                    (s, e, line, spk) for s, e, line in _assign_ts(lines, g0, g1)
-                )
+                for s, e, line in _assign_ts(lines, g0, g1):
+                    all_subs.append((s, e, line, spk))
+                    all_rich.append({"start": s, "end": e, "text": line,
+                                     "speaker": spk, "words": []})   # 無對齊 → 前端內插
 
         if not all_subs:
             # 全部段落都退化（垃圾輸出）→ 給明確原因，而非「未偵測到人聲」
@@ -904,6 +910,9 @@ class ASREngine:
 
         if progress_cb:
             progress_cb(total, total, "寫入字幕…")
+
+        # 字級結果掛上實例（webview_backend 讀取以驅動卡拉OK逐字高亮）
+        self._last_segments_rich = all_rich
 
         # 以原始檔案的目錄與檔名輸出（影片抽音軌時 audio_path 是暫存路徑）
         # 共用寫出層：依全域設定（或 out_format 覆寫）產出 .srt 或 .txt。

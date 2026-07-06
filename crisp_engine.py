@@ -430,16 +430,31 @@ class CrispWhisperEngine:
         if not ts_items:
             return None
 
-        lines = _ts_chatllm_to_subtitle_lines(
-            ts_items, raw_text, 0.0, None, self.cc, _output_simplified,
-            break_on_space=(not is_qwen),
+        # 日語：跳過 OpenCC 繁化。s2twp/s2t 是「簡體中文→繁體中文」轉換，套在日文上
+        # 會把日文漢字（会/静/図/学）誤轉成繁中字形（會/靜/圖/學），對日語讀者是錯的
+        # （ja-anime 模型本就針對日語，尤其該保留原生字形）。中文/台語維持繁化不變；
+        # 自動偵測無法預知語言，保守仍走繁化。
+        cc_use = None if _LANG_MAP.get(language) == "ja" else self.cc
+
+        self._last_segments_rich = None   # 本次字級結果（卡拉OK側通道）
+        lines5 = _ts_chatllm_to_subtitle_lines(
+            ts_items, raw_text, 0.0, None, cc_use, _output_simplified,
+            break_on_space=(not is_qwen), with_words=True,
         )
-        if not lines:
+        if not lines5:
             return None
+        lines = [(s, e, t, sp) for (s, e, t, sp, _w) in lines5]
 
         # 說話者分離（外部 ONNX，與 whisper/qwen 後端無關）：依時間中點指派每行說話者。
+        # diarize 只重新指派 speaker、不增減行，故與 lines5 平行 → 可 zip 併回字級。
         if diarize and self.diar_engine is not None and getattr(self.diar_engine, "ready", False):
             lines = self._apply_diarization(audio_path, lines, n_speakers, progress_cb)
+
+        # 字級結果掛上實例：speaker 取 diarize 後的 lines，words 取 lines5
+        self._last_segments_rich = [
+            {"start": a[0], "end": a[1], "text": a[2], "speaker": a[3], "words": b[4]}
+            for a, b in zip(lines, lines5)
+        ]
 
         # 共用寫出層：依全域設定（或 out_format 覆寫）產出 .srt 或 .txt。
         ref = original_path if original_path is not None else audio_path
@@ -491,7 +506,10 @@ class CrispWhisperEngine:
                 )
             txt = out_base.with_suffix(".txt")
             text = txt.read_text(encoding="utf-8", errors="replace").strip() if txt.exists() else ""
-        return text if _output_simplified else (self.cc.convert(text) if self.cc else text)
+        # 日語跳過繁化（同 process_file 理由）；中文/台語維持 s2twp/s2t。
+        if _output_simplified or _LANG_MAP.get(language) == "ja" or self.cc is None:
+            return text
+        return self.cc.convert(text)
 
 
 # ── SRT 解析 / 寫入（模組層工具）──────────────────────────────────────

@@ -31,7 +31,14 @@ __version__ = "1.0.9"
 #   功能：音檔 / 批次 / 錄製（麥克風選擇＋即時存檔）/ 端點（QR＋Cloudflare）/ 模型自檢。
 #   外觀：i18n（繁中／简体／English）、深淺色主題（視窗標題列同步）、介面縮放，全部實裝。
 #   打包：crispasr 核心隨包、VAD onnx 隨包；ffmpeg / chatllm 按需下載或外帶（不入安裝包）。
-WEBVIEW_VERSION = "webview 0.1"
+#
+# ── WebView 0.2 更新彙整（在 0.1 基礎上）──────────────────────────────────────
+#   核心：CrispASR 核心升級 v0.7.1→v0.8.8（GPU 偵測/日語 qwen3 後端驗證）。
+#   日語：新增 Qwen3-ASR-1.7B 日語動漫特化模型（cstr/ja-anime，Q4/Q8），日文歌詞/
+#         台詞辨識明顯較佳；語言選日語時跳過 OpenCC 繁化，保留日文原生漢字。
+#   體驗：卡拉OK逐字模式（字級時間軸貫通、播放逐字高亮）、真實波形+播放頭+分段標註、
+#         設定頁「每段最長秒數」滑桿（減少長段字級段尾漂移）。
+WEBVIEW_VERSION = "webview 0.2"
 
 # 自動更新來源：GitHub repo（owner/name）
 GITHUB_REPO = "dseditor/QwenASRMiniTool"

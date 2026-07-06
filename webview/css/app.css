@@ -604,6 +604,38 @@ textarea.input { resize: vertical; min-height: 64px; font-size: 13px; line-heigh
 .with-browse .input { width: 240px; }
 
 /* ============================================================
+   卡拉OK舞台（逐字高亮放大跳動）
+   —— 由字級 words 驅動；每字一個 .kara-char，JS 每幀設定 transform。
+   ============================================================ */
+.karaoke {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 18px; padding: 40px 28px 32px; min-height: 220px;
+  background: linear-gradient(180deg, var(--accent-tint), var(--panel));
+  border: 1px solid var(--line); border-radius: 16px; margin-bottom: 14px;
+  overflow: hidden;
+}
+.kara-line {
+  font-size: clamp(26px, 4.4vw, 46px); font-weight: 700; line-height: 1.5;
+  text-align: center; letter-spacing: .02em; max-width: 100%;
+}
+.kara-next {
+  font-size: clamp(14px, 1.8vw, 19px); font-weight: 500; color: var(--muted);
+  text-align: center; opacity: .65; min-height: 1.4em;
+}
+/* 每個字：預設「未唱」灰、置中放大原點在底部；color 平滑過渡，transform 由 JS 每幀直接設。 */
+.kara-char {
+  display: inline-block; color: var(--muted);
+  transform-origin: 50% 100%; will-change: transform;
+  transition: color .18s ease;
+}
+.kara-char.sung   { color: var(--accent); }            /* 已唱過 → 主題色填滿 */
+.kara-char.active { color: var(--accent-strong); text-shadow: 0 2px 14px rgba(14,142,122,.35); }
+.kara-char.space  { width: .4em; }                      /* 拉丁詞間空白 */
+[data-theme="dark"] .kara-char.active { text-shadow: 0 2px 16px rgba(24,168,146,.45); }
+/* 卡拉OK啟用時，麥克風鈕高亮 */
+.play-btn.kara-on { background: var(--accent); color: #fff; }
+
+/* ============================================================
    響應式 + 動效收斂
    ============================================================ */
 @media (max-width: 1100px) {

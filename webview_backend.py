@@ -46,6 +46,9 @@ _MODEL_CATALOG = [
     ("Qwen", "Qwen3-ASR-1.7B INT8",         "openvino", {"cpu_model_size": "1.7B"}),
     ("Qwen", "Qwen3-ASR-1.7B Q4 (CRISPASR/Vulkan)", "crispasr", {"crisp_model": "qwen3", "crisp_qwen_quant": "q4"}),
     ("Qwen", "Qwen3-ASR-1.7B Q8 (CRISPASR/Vulkan)", "crispasr", {"crisp_model": "qwen3", "crisp_qwen_quant": "q8"}),
+    # 日語動漫特化（cstr/qwen3-asr-1.7b-ja-anime）：同架構、針對日語微調，日文歌詞/台詞辨識較佳。
+    ("Qwen", "Qwen3-ASR-1.7B 日語動漫 Q4 (CRISPASR/Vulkan)", "crispasr", {"crisp_model": "qwen3-ja", "crisp_qwen_quant": "q4"}),
+    ("Qwen", "Qwen3-ASR-1.7B 日語動漫 Q8 (CRISPASR/Vulkan)", "crispasr", {"crisp_model": "qwen3-ja", "crisp_qwen_quant": "q8"}),
     # chatllm（相容項）：永遠在目錄中（供 set_model 查得），但 get_model_options
     # 會依 _chatllm_available 決定是否實際呈現給前端。
     ("Qwen", _CHATLLM_LABEL,                "chatllm",  {}),
@@ -56,6 +59,28 @@ _MODEL_CATALOG = [
 _BREEZE_QUANT_LABEL = {"q4": "Breeze Q4 (輕量)", "q5": "Breeze Q5 (標準)", "q8": "Breeze Q8 (精確)"}
 _QWEN_CASR_QUANT_LABEL = {"q4": "Qwen3-ASR-1.7B Q4 (CRISPASR/Vulkan)",
                           "q8": "Qwen3-ASR-1.7B Q8 (CRISPASR/Vulkan)"}
+_QWEN_JA_CASR_QUANT_LABEL = {"q4": "Qwen3-ASR-1.7B 日語動漫 Q4 (CRISPASR/Vulkan)",
+                             "q8": "Qwen3-ASR-1.7B 日語動漫 Q8 (CRISPASR/Vulkan)"}
+# crispasr-Qwen 系列的 crisp_model 值（皆走 --backend qwen3-1.7b、同置 ov_models/、
+# 共用 crisp_qwen_quant，差別只在權重與下載來源）。"breeze" 不在此列。
+_QWEN_CASR_MODELS = ("qwen3", "qwen3-ja")
+
+
+def _qwen_casr_dl(crisp_model: str):
+    """依 crisp_model 回傳對應的 (檔名, 存在檢查, 下載) 三個下載器函式。
+
+    qwen3     → 標準 Qwen3-ASR-1.7B（cstr/qwen3-asr-1.7b-GGUF）
+    qwen3-ja  → 日語動漫特化（cstr/qwen3-asr-1.7b-ja-anime-GGUF）
+    讓所有「crispasr-Qwen」路徑共用一處分派，避免 qwen3/qwen3-ja 分支散落各方法。
+    """
+    from downloader import (qwen3_asr_gguf_filename, quick_check_qwen3_asr_gguf,
+                            download_qwen3_asr_gguf, qwen3_asr_ja_gguf_filename,
+                            quick_check_qwen3_asr_ja_gguf, download_qwen3_asr_ja_gguf)
+    if crisp_model == "qwen3-ja":
+        return (qwen3_asr_ja_gguf_filename, quick_check_qwen3_asr_ja_gguf,
+                download_qwen3_asr_ja_gguf)
+    return (qwen3_asr_gguf_filename, quick_check_qwen3_asr_gguf,
+            download_qwen3_asr_gguf)
 
 # 說話者分離是「與後端無關的外部 ONNX」(diarize.py / DiarizationEngine)：
 # OpenVINO 與 CRISPASR(whisper/qwen) 皆支援——前者 process_file 內建 use_diar 分支，
@@ -92,6 +117,29 @@ def parse_srt_to_segments(srt_path) -> list[dict]:
                 speaker = int(digits) if digits else None
                 text = rest
         out.append({"start": s["start"], "end": s["end"], "speaker": speaker, "text": text})
+    return out
+
+
+def _rich_to_segments(rich) -> list[dict]:
+    """引擎側通道 _last_segments_rich → 前端 segments（含字級 words，卡拉OK用）。
+
+    引擎存的 speaker 是原始標籤（"說話者N" 或 None）；此處正規化成整數，
+    與 parse_srt_to_segments 的前端契約一致。words 原樣帶出（[]=無對齊）。
+    """
+    out = []
+    for seg in (rich or []):
+        spk = seg.get("speaker")
+        speaker = None
+        if isinstance(spk, int):
+            speaker = spk
+        elif isinstance(spk, str):
+            digits = "".join(c for c in spk if c.isdigit())
+            speaker = int(digits) if digits else None
+        out.append({
+            "start": seg["start"], "end": seg["end"],
+            "speaker": speaker, "text": seg["text"],
+            "words": seg.get("words") or [],
+        })
     return out
 
 
@@ -201,6 +249,26 @@ class WebBackend:
         m = re.search(r"GPU:(\d+)", s.get("device", "") or "")
         return int(m.group(1)) if m else 0
 
+    # 每段最長秒數：使用者設定 → 套到當前引擎，但永遠夾到「模型天花板」。
+    # 天花板＝引擎類別的 max_chunk_secs（0.6B/chatllm 30、1.7B 10），由音訊
+    # 編碼器匯出長度寫死，超過會被靜默截斷掉字，故只允許往短調，絕不超過。
+    # crispasr（無 max_chunk_secs 類別屬性）走自身視窗，不受此設定影響。
+    _CHUNK_FLOOR = 5
+    def _apply_chunk_secs(self) -> None:
+        eng = getattr(self, "engine", None)
+        ceiling = getattr(type(eng), "max_chunk_secs", None) if eng is not None else None
+        if not isinstance(ceiling, int):
+            return                                  # crispasr 等：不以 max_chunk_secs 分段
+        try:
+            want = int(self._settings_raw().get("chunk_secs", 0) or 0)
+        except Exception:
+            want = 0
+        eff = ceiling if want <= 0 else max(self._CHUNK_FLOOR, min(want, ceiling))
+        try:
+            eng.max_chunk_secs = eff                # 實例屬性遮蓋類別預設，僅影響本實例
+        except Exception:
+            pass
+
     def _dl_progress(self, *a):
         """下載進度回呼（容忍 progress_cb(frac) 或 progress_cb(frac, msg)）。"""
         frac = a[0] if a else 0
@@ -286,18 +354,19 @@ class WebBackend:
             self._st("下載 CrispASR 核心（約 27 MB）…")
             download_crispasr_core(crispasr_dir, progress_cb=self._dl_progress)
 
-        if crisp_model == "qwen3":
+        if crisp_model in _QWEN_CASR_MODELS:
             # Qwen3-ASR GGUF（與 OV 模型同置 ov_models/；crisp_engine 依檔名含 "1.7b"
-            # 自動推斷 --backend qwen3-1.7b）。Q4/Q8 兩量化，缺檔自動下載（cstr repo）。
-            from downloader import (quick_check_qwen3_asr_gguf, download_qwen3_asr_gguf,
-                                    qwen3_asr_gguf_filename)
+            # 自動推斷 --backend qwen3-1.7b）。標準版與日語動漫版共用此路徑，僅來源/
+            # 檔名不同（由 _qwen_casr_dl 分派）。Q4/Q8 兩量化，缺檔自動下載（cstr repo）。
+            fname_fn, check_fn, download_fn = _qwen_casr_dl(crisp_model)
             qquant = s.get("crisp_qwen_quant", "q8")
             model_dir = Path(s.get("model_dir", str(getattr(core, "_DEFAULT_MODEL_DIR",
                                                             BASE_DIR / "ov_models"))))
-            model_path = model_dir / qwen3_asr_gguf_filename(qquant)
-            if not quick_check_qwen3_asr_gguf(model_dir, qquant):
-                self._st(f"下載 Qwen3-ASR-1.7B {qquant.upper()} GGUF…")
-                download_qwen3_asr_gguf(model_dir, qquant, progress_cb=self._dl_progress)
+            model_path = model_dir / fname_fn(qquant)
+            if not check_fn(model_dir, qquant):
+                _ja = "（日語動漫）" if crisp_model == "qwen3-ja" else ""
+                self._st(f"下載 Qwen3-ASR-1.7B{_ja} {qquant.upper()} GGUF…")
+                download_fn(model_dir, qquant, progress_cb=self._dl_progress)
         else:
             model_path = crispasr_dir / breeze_filename(quant)
             if not quick_check_breeze(crispasr_dir, quant):
@@ -347,7 +416,7 @@ class WebBackend:
         """
         try:
             from downloader import (quick_check, quick_check_1p7b, quick_check_breeze,
-                                    quick_check_qwen3_asr_gguf, quick_check_crispasr)
+                                    quick_check_crispasr)
             s = self._settings_raw()
             be = s.get("backend", "openvino")
             model_dir = self._model_dir()
@@ -358,8 +427,10 @@ class WebBackend:
                 cd = self._crispasr_dir()
                 if not quick_check_crispasr(cd):
                     return False                  # 核心 exe 缺（理論上隨包附帶）→ 當作未就緒
-                if s.get("crisp_model", "breeze") == "qwen3":
-                    return quick_check_qwen3_asr_gguf(model_dir, s.get("crisp_qwen_quant", "q8"))
+                cm = s.get("crisp_model", "breeze")
+                if cm in _QWEN_CASR_MODELS:
+                    _, check_fn, _ = _qwen_casr_dl(cm)
+                    return check_fn(model_dir, s.get("crisp_qwen_quant", "q8"))
                 return quick_check_breeze(cd, s.get("crisp_quant", "q5"))
             if be == "chatllm":
                 return ((self._chatllm_dir() / "qwen3-asr-1.7b.bin").exists()
@@ -372,7 +443,7 @@ class WebBackend:
         """機器上是否已有任一可用模型（任一核心任一量化）。供首啟頁面決策。"""
         try:
             from downloader import (quick_check, quick_check_1p7b, quick_check_breeze,
-                                    quick_check_qwen3_asr_gguf)
+                                    quick_check_qwen3_asr_gguf, quick_check_qwen3_asr_ja_gguf)
             model_dir = self._model_dir()
             crispasr_dir = self._crispasr_dir()
             if quick_check(model_dir) or quick_check_1p7b(model_dir):
@@ -381,7 +452,7 @@ class WebBackend:
                 if quick_check_breeze(crispasr_dir, q):
                     return True
             for q in ("q4", "q8"):
-                if quick_check_qwen3_asr_gguf(model_dir, q):
+                if quick_check_qwen3_asr_gguf(model_dir, q) or quick_check_qwen3_asr_ja_gguf(model_dir, q):
                     return True
             # chatllm .bin（向下相容）
             if (self._chatllm_dir() / "qwen3-asr-1.7b.bin").exists():
@@ -484,6 +555,12 @@ class WebBackend:
                 out_ref = srt_dir / "transcript"
 
             with self._lock:
+                self._apply_chunk_secs()      # 依設定夾定本次 max_chunk_secs（夾到模型上限）
+                # 清除上一輪字級殘留，避免本輪若提前 return 時讀到舊資料
+                try:
+                    self.engine._last_segments_rich = None
+                except Exception:
+                    pass
                 srt = self.engine.process_file(
                     audio_path,
                     progress_cb=_cb,
@@ -507,7 +584,9 @@ class WebBackend:
 
         # UI 永遠以記憶體中的 segments 渲染波形/字幕卡（需時間軸），故引擎固定產 SRT。
         # 但「輸出格式」設定決定使用者實際取得的存檔：選純文字 → 另寫 .txt、移除 .srt。
-        segments = parse_srt_to_segments(srt)
+        # 優先用引擎的字級結構（含 words，驅動卡拉OK）；無則退回解析 SRT（行級）。
+        rich = getattr(self.engine, "_last_segments_rich", None)
+        segments = _rich_to_segments(rich) if rich else parse_srt_to_segments(srt)
         saved = str(srt)
         out_fmt = (self._settings_raw().get("output_format", "srt") or "srt").lower()
         if out_fmt == "txt":
@@ -765,7 +844,11 @@ class WebBackend:
         s = self._settings_raw()
         be = s.get("backend", "openvino")
         if be == "crispasr":
-            if s.get("crisp_model", "breeze") == "qwen3":
+            cm = s.get("crisp_model", "breeze")
+            if cm == "qwen3-ja":
+                qq = s.get("crisp_qwen_quant", "q8")
+                return ("Qwen", _QWEN_JA_CASR_QUANT_LABEL.get(qq, _QWEN_JA_CASR_QUANT_LABEL["q8"]))
+            if cm == "qwen3":
                 qq = s.get("crisp_qwen_quant", "q8")
                 return ("Qwen", _QWEN_CASR_QUANT_LABEL.get(qq, _QWEN_CASR_QUANT_LABEL["q8"]))
             q = s.get("crisp_quant", "q5")
@@ -904,7 +987,7 @@ class WebBackend:
         from downloader import (quick_check, quick_check_1p7b, quick_check_aligner,
                                 quick_check_diarization, quick_check_crispasr,
                                 quick_check_breeze, quick_check_qwen3_asr_gguf,
-                                quick_check_aligner_gguf)
+                                quick_check_qwen3_asr_ja_gguf, quick_check_aligner_gguf)
         s = self._settings_raw()
         model_dir = self._model_dir()
         crispasr_dir = self._crispasr_dir()
@@ -963,6 +1046,9 @@ class WebBackend:
                 item("qwen", f"Qwen3-ASR-1.7B 模型（{qwen_quant.upper()}）",
                      quick_check_qwen3_asr_gguf(model_dir, qwen_quant),
                      "已下載", "未下載（啟用時下載）"),
+                item("qwen_ja", f"Qwen3-ASR-1.7B 日語動漫模型（{qwen_quant.upper()}）",
+                     quick_check_qwen3_asr_ja_gguf(model_dir, qwen_quant),
+                     "已下載", "未下載（日語增強，啟用時下載）"),
                 item("fa", f"時間軸對齊 FA（aligner gguf {fa_quant.upper()}）",
                      quick_check_aligner_gguf(crispasr_dir, fa_quant),
                      "已下載", "未下載（約 643MB，啟用時下載）"),
@@ -1045,6 +1131,7 @@ class WebBackend:
             "theme": s.get("appearance", "light"),
             "uiLang": s.get("ui_lang", "繁體中文"),
             "vad": float(s.get("vad_threshold", 0.5)),
+            "chunkSecs": int(s.get("chunk_secs", 0) or 0),   # 0=自動（依模型上限）
         }
 
     def set_settings(self, patch: dict) -> dict:
@@ -1063,7 +1150,7 @@ class WebBackend:
             cur["vocab_convert"] = conv
         key_map = {"scale": "ui_scale", "format": "output_format",
                    "mirror": "hf_mirror", "ffmpeg": "ffmpeg_path", "theme": "appearance",
-                   "uiLang": "ui_lang", "vad": "vad_threshold"}
+                   "uiLang": "ui_lang", "vad": "vad_threshold", "chunkSecs": "chunk_secs"}
         for k, v in patch.items():
             if k in key_map:
                 cur[key_map[k]] = v

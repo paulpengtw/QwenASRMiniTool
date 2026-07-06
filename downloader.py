@@ -315,9 +315,10 @@ def download_1p7b(model_dir: Path, progress_cb=None):
 # CrispASR(Whisper) 核心 + Breeze-ASR-26 GGML 模型（按需下載，不進 EXE）
 # ══════════════════════════════════════════════════════════════════════
 
-# 已測試完成的 CrispASR Windows Vulkan 版（v0.7.2）
+# 已測試完成的 CrispASR Windows Vulkan 版（v0.8.8，2026-07 實機驗證：版本/GPU
+# 偵測/日語 qwen3 後端皆正常，--diagnostics 輸出格式與 probe_crispasr_devices 相容）
 _CRISPASR_ZIP_URL = ("https://github.com/CrispStrobe/CrispASR/releases/"
-                     "download/v0.7.2/crispasr-windows-x86_64-vulkan.zip")
+                     "download/v0.8.8/crispasr-windows-x86_64-vulkan.zip")
 
 # Breeze-ASR-26 GGML（phate334）三種量化
 _BREEZE_REPO  = "phate334/Breeze-ASR-26-GGML"
@@ -560,6 +561,57 @@ def download_qwen3_asr_gguf(model_dir: Path,
             )
 
     _download_file(f"{_QWEN3_ASR_GGUF_BASE}/{fname}", dest, progress_cb=_cb)
+    if progress_cb:
+        progress_cb(1.0, f"✅ {fname}")
+
+
+# ── Qwen3-ASR-1.7B 日本動漫特化 GGUF（cstr，日語辨識增強）──────────────────
+# 與標準 qwen3-asr-1.7b 同架構（crisp_engine._infer_backend 依檔名含 "1.7b" 一樣
+# 推斷 --backend qwen3-1.7b），差別只在權重針對日語／動漫語音微調 → 日文歌詞、
+# 台詞辨識明顯較佳。同置 ov_models/；缺檔按需下載。只有 q4/q8 兩量化。
+_QWEN3_ASR_JA_GGUF_REPO = "cstr/qwen3-asr-1.7b-ja-anime-GGUF"
+_QWEN3_ASR_JA_GGUF_BASE = f"https://huggingface.co/{_QWEN3_ASR_JA_GGUF_REPO}/resolve/main"
+_QWEN3_ASR_JA_GGUF_FILES = {
+    "q4": "qwen3-asr-1.7b-ja-anime-q4_k.gguf",   # 輕量 ~1.33 GB
+    "q8": "qwen3-asr-1.7b-ja-anime-q8_0.gguf",   # 精確 ~2.51 GB
+}
+_QWEN3_ASR_JA_GGUF_DEFAULT = "q8"
+
+
+def qwen3_asr_ja_gguf_filename(quant: str = _QWEN3_ASR_JA_GGUF_DEFAULT) -> str:
+    """量化代碼（q4/q8）→ Qwen3-ASR-1.7B ja-anime GGUF 檔名（未知時回傳 q8）。"""
+    return _QWEN3_ASR_JA_GGUF_FILES.get(quant, _QWEN3_ASR_JA_GGUF_FILES[_QWEN3_ASR_JA_GGUF_DEFAULT])
+
+
+def quick_check_qwen3_asr_ja_gguf(model_dir: Path,
+                                  quant: str = _QWEN3_ASR_JA_GGUF_DEFAULT) -> bool:
+    """指定量化的 ja-anime GGUF 是否存在（排除 LFS pointer）。"""
+    return _file_is_real(Path(model_dir) / qwen3_asr_ja_gguf_filename(quant))
+
+
+def download_qwen3_asr_ja_gguf(model_dir: Path,
+                               quant: str = _QWEN3_ASR_JA_GGUF_DEFAULT, progress_cb=None):
+    """下載指定量化的 Qwen3-ASR-1.7B ja-anime GGUF 至 model_dir（通常為 ov_models/）。
+
+    progress_cb(pct: float, msg: str)。支援斷點續傳與 HF 鏡像。
+    """
+    model_dir = Path(model_dir)
+    model_dir.mkdir(parents=True, exist_ok=True)
+    fname = qwen3_asr_ja_gguf_filename(quant)
+    dest  = model_dir / fname
+    if _file_is_real(dest):
+        if progress_cb:
+            progress_cb(1.0, f"{fname} 已存在")
+        return
+
+    def _cb(done: int, total_b: int):
+        if progress_cb and total_b > 0:
+            progress_cb(
+                done / total_b,
+                f"下載 {fname}…  {done/1_048_576:.0f} / {total_b/1_048_576:.0f} MB",
+            )
+
+    _download_file(f"{_QWEN3_ASR_JA_GGUF_BASE}/{fname}", dest, progress_cb=_cb)
     if progress_cb:
         progress_cb(1.0, f"✅ {fname}")
 
