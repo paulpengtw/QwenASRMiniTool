@@ -520,6 +520,7 @@ class ASREngine:
     """封裝所有模型。transcribe() 加互斥鎖，多執行緒安全。"""
 
     max_chunk_secs: int = 30   # 每段最長音訊（秒），子類別可覆寫
+    _OV_SUBDIR: str = "qwen3_asr_int8"   # model_dir 下的 OV 模型子目錄，子類別可覆寫
     # 時間軸對齊改用 chatllm 原生 FA（無需 torch）；與 ChatLLMASREngine 共用
     # 同一檔名與下載流程，讓「時間軸對齊」UI 在 CPU/GPU 後端行為一致。
     FA_BIN_NAME = "qwen3-focedaligner-0.6b.bin"
@@ -553,7 +554,7 @@ class ASREngine:
         if model_dir is None:
             model_dir = _DEFAULT_MODEL_DIR
         self._model_dir = model_dir   # FA .bin 與按需下載位置
-        ov_dir   = model_dir / "qwen3_asr_int8"
+        ov_dir   = model_dir / self._OV_SUBDIR   # 0.6B / 1.7B 由類屬性決定
 
         # ── CPU 執行緒設定 ─────────────────────────────────────────────
         # LATENCY hint：單一請求最低延遲（不同於 THROUGHPUT 批次模式）
@@ -591,8 +592,7 @@ class ASREngine:
         core = ov.Core()
         self.audio_enc = core.compile_model(str(ov_dir / "audio_encoder_model.xml"),      device, cpu_cfg)
         self.embedder  = core.compile_model(str(ov_dir / "thinker_embeddings_model.xml"), device, cpu_cfg)
-        dec_comp       = core.compile_model(str(ov_dir / "decoder_model.xml"),            device, cpu_cfg)
-        self.dec_req   = dec_comp.create_infer_request()
+        self._compile_decoder(core, ov_dir, device, cpu_cfg)   # 0.6B stateful / 1.7B KV-cache
 
         _s("載入 Processor（純 numpy）…")
         self.processor = LightProcessor(ov_dir)
@@ -655,6 +655,46 @@ class ASREngine:
             return []
         return self._fa.align_chunk(wav_path, ref_text, language)
 
+    # ── Decoder 掛勾（0.6B stateful；ASREngine1p7B 覆寫為 KV-cache）───────
+    #    2026-08 修正：舊版 ASREngine1p7B 的 load/推理覆寫在 ce1f8b0 重構時被
+    #    誤刪，導致「1.7B INT8」實際上載入 0.6B 目錄（只裝 1.7B 的機器直接
+    #    報 Could not open qwen3_asr_int8/...xml）。改以掛勾點分離差異。
+
+    def _compile_decoder(self, core, ov_dir: Path, device: str, cpu_cfg: dict):
+        """編譯 decoder。0.6B：單一 stateful decoder_model.xml。"""
+        dec_comp     = core.compile_model(str(ov_dir / "decoder_model.xml"), device, cpu_cfg)
+        self.dec_req = dec_comp.create_infer_request()
+
+    def _encode_audio(self, mel) -> np.ndarray:
+        """mel → audio embeds。1.7B 匯出的輸入不含 batch 維度，由子類覆寫。"""
+        return list(self.audio_enc({"mel": mel}).values())[0]
+
+    def _generate_tokens(self, combined: np.ndarray, max_tokens: int) -> list[int]:
+        """自回歸貪婪解碼（0.6B stateful decoder）。回傳生成的 token id 列表。
+
+        transcribe() 與 process_file() 共用此迴圈（原本兩處內聯重複）。
+        """
+        L   = combined.shape[1]
+        pos = np.arange(L, dtype=np.int64)[np.newaxis, :]
+        self.dec_req.reset_state()
+        out    = self.dec_req.infer({0: combined, "position_ids": pos})
+        logits = list(out.values())[0]
+        eos = self.processor.eos_id
+        eot = self.processor.eot_id
+        gen: list[int] = []
+        nxt = int(np.argmax(logits[0, -1, :])); cur = L
+        while nxt not in (eos, eot) and len(gen) < max_tokens:
+            gen.append(nxt)
+            emb = list(self.embedder(
+                {"input_ids": np.array([[nxt]], dtype=np.int64)}
+            ).values())[0]
+            out    = self.dec_req.infer(
+                {0: emb, "position_ids": np.array([[cur]], dtype=np.int64)}
+            )
+            logits = list(out.values())[0]
+            nxt = int(np.argmax(logits[0, -1, :])); cur += 1
+        return gen
+
     def transcribe(
         self,
         audio: np.ndarray,
@@ -671,7 +711,7 @@ class ASREngine:
             mel, ids = self.processor.prepare(audio, language=language, context=context)
 
             # ── 音頻編碼 + 文字 Embedding ────────────────────────────
-            ae = list(self.audio_enc({"mel": mel}).values())[0]
+            ae = self._encode_audio(mel)
             te = list(self.embedder({"input_ids": ids}).values())[0]
 
             # ── 音頻特徵填入音頻 pad 位置 ─────────────────────────────
@@ -684,27 +724,8 @@ class ASREngine:
             else:
                 combined[0, mask] = ae[0]
 
-            # ── Decoder 自回歸生成 ────────────────────────────────────
-            L   = combined.shape[1]
-            pos = np.arange(L, dtype=np.int64)[np.newaxis, :]
-            self.dec_req.reset_state()
-            out    = self.dec_req.infer({0: combined, "position_ids": pos})
-            logits = list(out.values())[0]
-
-            eos = self.processor.eos_id
-            eot = self.processor.eot_id
-            gen: list[int] = []
-            nxt = int(np.argmax(logits[0, -1, :])); cur = L
-            while nxt not in (eos, eot) and len(gen) < max_tokens:
-                gen.append(nxt)
-                emb = list(self.embedder(
-                    {"input_ids": np.array([[nxt]], dtype=np.int64)}
-                ).values())[0]
-                out    = self.dec_req.infer(
-                    {0: emb, "position_ids": np.array([[cur]], dtype=np.int64)}
-                )
-                logits = list(out.values())[0]
-                nxt = int(np.argmax(logits[0, -1, :])); cur += 1
+            # ── Decoder 自回歸生成（0.6B stateful / 1.7B KV-cache 掛勾）──
+            gen = self._generate_tokens(combined, max_tokens)
 
             # ── 解碼（純 Python BPE decode）──────────────────────────
             raw = self.processor.decode(gen)
@@ -811,7 +832,7 @@ class ASREngine:
             with self._lock:
                 mel, ids = self.processor.prepare(
                     chunk, language=language, context=context)
-                ae = list(self.audio_enc({"mel": mel}).values())[0]
+                ae = self._encode_audio(mel)
                 te = list(self.embedder({"input_ids": ids}).values())[0]
                 combined = te.copy()
                 mask = ids[0] == self.pad_id
@@ -821,25 +842,8 @@ class ASREngine:
                     combined[0, np.where(mask)[0][:mn]] = ae[0, :mn]
                 else:
                     combined[0, mask] = ae[0]
-                L   = combined.shape[1]
-                pos = np.arange(L, dtype=np.int64)[np.newaxis, :]
-                self.dec_req.reset_state()
-                out    = self.dec_req.infer({0: combined, "position_ids": pos})
-                logits = list(out.values())[0]
-                eos = self.processor.eos_id
-                eot = self.processor.eot_id
-                gen: list[int] = []
-                nxt = int(np.argmax(logits[0, -1, :])); cur = L
-                while nxt not in (eos, eot) and len(gen) < max_tok:
-                    gen.append(nxt)
-                    emb = list(self.embedder(
-                        {"input_ids": np.array([[nxt]], dtype=np.int64)}
-                    ).values())[0]
-                    out    = self.dec_req.infer(
-                        {0: emb, "position_ids": np.array([[cur]], dtype=np.int64)}
-                    )
-                    logits = list(out.values())[0]
-                    nxt = int(np.argmax(logits[0, -1, :])); cur += 1
+                # 生成（0.6B stateful / 1.7B KV-cache 掛勾）
+                gen = self._generate_tokens(combined, max_tok)
                 raw_decoded = self.processor.decode(gen)
                 if "<asr_text>" in raw_decoded:
                     raw_decoded = raw_decoded.split("<asr_text>", 1)[1]
@@ -937,6 +941,67 @@ class ASREngine1p7B(ASREngine):
 
     _OV_SUBDIR     = "qwen3_asr_1p7b_kv_int8"
     max_chunk_secs = 10   # audio_encoder 匯出固定 T=1000（10s）
+
+    def __init__(self):
+        super().__init__()
+        self.pf_model = None   # compiled prefill model
+        self.dc_model = None   # compiled decode-step model
+
+    # ── 掛勾覆寫（load/transcribe/process_file 全部沿用基底類）────────────
+    #    2026-08 修正：KV-cache 推理實作曾於 ce1f8b0 重構時被誤刪，導致本類
+    #    退化成空殼、繼承 0.6B 的 load 而讀錯目錄。自 2343122 版本復原並改寫
+    #    為掛勾覆寫，讓 1.7B 同步取得 cpu_threads/FA 對齊等後續新功能。
+
+    def _compile_decoder(self, core, ov_dir: Path, device: str, cpu_cfg: dict):
+        """1.7B：prefill + decode-step 兩個 KV-cache 模型，不用 stateful decoder。"""
+        self.pf_model = core.compile_model(
+            str(ov_dir / "decoder_prefill_kv_model.xml"), device, cpu_cfg)
+        self.dc_model = core.compile_model(
+            str(ov_dir / "decoder_kv_model.xml"),         device, cpu_cfg)
+        self.dec_req  = None
+
+    def _encode_audio(self, mel) -> np.ndarray:
+        """1.7B audio_encoder 匯出的輸入不含 batch 維度：mel (128, 1000)。"""
+        return list(self.audio_enc({"mel": mel[0]}).values())[0]
+
+    def _generate_tokens(self, combined: np.ndarray, max_tokens: int) -> list[int]:
+        """KV-cache 貪婪解碼：O(L²) prefill 一次 + O(n) 逐 token decode。"""
+        seq_len = combined.shape[1]
+        pos_ids = np.arange(seq_len, dtype=np.int64)[np.newaxis, :]
+        pf_out  = self.pf_model({"input_embeds": combined, "position_ids": pos_ids})
+        pf_vals = list(pf_out.values())
+        logits  = pf_vals[0]   # (1, 1, vocab)
+        past_k  = pf_vals[1]   # (28, 1, 8, L, 128)
+        past_v  = pf_vals[2]
+
+        eos = self.processor.eos_id
+        eot = self.processor.eot_id
+        nxt = int(np.argmax(logits[0, -1, :]))
+        if nxt in (eos, eot):
+            return []
+
+        gen = [nxt]
+        cur = seq_len
+        for _ in range(max_tokens - 1):
+            new_emb = list(self.embedder(
+                {"input_ids": np.array([[nxt]], dtype=np.int64)}
+            ).values())[0]
+            dc_out = self.dc_model({
+                "new_embed":   new_emb,
+                "new_pos":     np.array([[cur]], dtype=np.int64),
+                "past_keys":   past_k,
+                "past_values": past_v,
+            })
+            dc_vals = list(dc_out.values())
+            logits  = dc_vals[0]
+            past_k  = dc_vals[1]
+            past_v  = dc_vals[2]
+            nxt = int(np.argmax(logits[0, -1, :]))
+            if nxt in (eos, eot):
+                break
+            gen.append(nxt)
+            cur += 1
+        return gen
 
 
 # ══════════════════════════════════════════════════════
