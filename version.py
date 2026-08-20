@@ -38,7 +38,16 @@ __version__ = "1.0.9"
 #         台詞辨識明顯較佳；語言選日語時跳過 OpenCC 繁化，保留日文原生漢字。
 #   體驗：卡拉OK逐字模式（字級時間軸貫通、播放逐字高亮）、真實波形+播放頭+分段標註、
 #         設定頁「每段最長秒數」滑桿（減少長段字級段尾漂移）。
-WEBVIEW_VERSION = "webview 0.2"
+#
+# ── WebView 0.2.1 更新彙整（hotfix）──────────────────────────────────────────
+#   修復：1.7B INT8 (CPU/OpenVINO) 無法載入——ce1f8b0 重構誤刪 KV-cache 實作，
+#         導致選 1.7B 實際讀取 0.6B 目錄（只裝 1.7B 直接報錯、兩者皆裝則默默
+#         跑 0.6B）。復原 prefill+decode KV-cache 推理並改掛勾式覆寫，1.7B 同步
+#         取得 cpu_threads／FA 字級對齊等後續功能。
+#   改善：說話者分離聚類改版——長段落切 3 秒子窗逐窗提聲紋、自動人數改
+#         silhouette 選擇＋雙重單人防護，修「同人被拆／異人被併」；短段落
+#         不再丟棄（修 OpenVINO 路徑短句漏字）。
+WEBVIEW_VERSION = "webview 0.2.1"
 
 # 自動更新來源：GitHub repo（owner/name）
 GITHUB_REPO = "dseditor/QwenASRMiniTool"
