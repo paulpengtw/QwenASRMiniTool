@@ -23,6 +23,7 @@ An implementation-ready decision map for Ubuntu source support: Ubuntu 24.04 x86
 - [Choose the Ubuntu browser lifecycle contract](issues/02-choose-browser-lifecycle-contract.md): One local process owns a reconnectable browser app session with explicit, bounded shutdown; browser tabs do not own server or non-recording job lifetime.
 - [Define capability presentation and settings recovery](issues/03-define-capability-presentation-and-settings-recovery.md): Ubuntu exposes only supported choices, derives OpenVINO CPU without overwriting Windows intent, and renders backend-owned capability, setup, recovery, and health states.
 - [Choose Ubuntu alignment behaviour](issues/08-choose-ubuntu-alignment-behaviour.md): Ubuntu keeps word-level timing as visibly proportional estimation — exact alignment stays Windows-only, its settings preserved but inert, and no Linux aligner is adopted.
+- [Define reconnectable transcription job state](issues/09-define-reconnectable-transcription-job-state.md): A session-lifetime, server-owned job registry (queued→running→completed/failed/cancelled, one at a time) where a batch is one job with per-item states, result edits are server-owned, and recordings end with their capture client while retaining transcribed segments; only saved files survive restart.
 
 ## Not yet specified
 
