@@ -1,0 +1,426 @@
+<title>Ubuntu 對齊行為 A/B/C</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Space+Grotesk:wght@500;700&family=Space+Mono&display=swap">
+<style>
+/* ── App design tokens (verbatim from webview/css/app.css) ───────── */
+:root{
+  --paper:#F8F7F4; --panel:#FFFFFF; --panel-2:#FCFBF9;
+  --ink:#17171A; --ink-2:#3A3A40; --muted:#707078; --faint:#A0A099;
+  --line:#E7E5E0; --line-strong:#D8D5CE;
+  --accent:#0E8E7A; --accent-strong:#0B7565; --accent-soft:#E3F4F0; --accent-tint:#F0F8F6;
+  --live:#E5484D; --ok:#1C8C5A; --ok-soft:#E6F3EC;
+  --warn-bg:#FBF4E6; --warn-fg:#8A6312; --warn-line:#ECDCB6;
+  --r-card:12px; --r-btn:8px; --r-pill:999px;
+  --shadow-sm:0 1px 2px rgba(20,20,30,.05);
+  --shadow:0 1px 2px rgba(20,20,30,.04),0 6px 18px rgba(20,20,30,.06);
+  --font-ui:"Noto Sans TC","Microsoft JhengHei",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-disp:"Space Grotesk","Noto Sans TC",system-ui,sans-serif;
+  --font-mono:"Space Mono","JetBrains Mono","Consolas",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#15161A; --panel:#1E2026; --panel-2:#191A1F;
+    --ink:#ECEDEF; --ink-2:#C6C7CC; --muted:#9597A0; --faint:#6A6C75;
+    --line:#2C2E36; --line-strong:#3A3D47;
+    --accent:#18A892; --accent-strong:#13917D; --accent-soft:#14322D; --accent-tint:#122220;
+    --live:#FF5C61; --ok:#2BB070; --ok-soft:#15321F;
+    --warn-bg:#2E2716; --warn-fg:#E6B968; --warn-line:#4A3E20;
+    --shadow-sm:0 1px 2px rgba(0,0,0,.35);
+    --shadow:0 1px 2px rgba(0,0,0,.30),0 6px 18px rgba(0,0,0,.40);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#15161A; --panel:#1E2026; --panel-2:#191A1F;
+  --ink:#ECEDEF; --ink-2:#C6C7CC; --muted:#9597A0; --faint:#6A6C75;
+  --line:#2C2E36; --line-strong:#3A3D47;
+  --accent:#18A892; --accent-strong:#13917D; --accent-soft:#14322D; --accent-tint:#122220;
+  --live:#FF5C61; --ok:#2BB070; --ok-soft:#15321F;
+  --warn-bg:#2E2716; --warn-fg:#E6B968; --warn-line:#4A3E20;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.35);
+  --shadow:0 1px 2px rgba(0,0,0,.30),0 6px 18px rgba(0,0,0,.40);
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;font-family:var(--font-ui);color:var(--ink);background:var(--paper);font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased;padding-bottom:96px}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+
+/* ── Page frame (prototype chrome — mono + dashed, not the design under test) ── */
+.frame{max-width:1100px;margin:0 auto;padding:28px 20px}
+.frame h1{font-family:var(--font-disp);font-size:26px;margin:0 0 4px;text-wrap:balance}
+.frame .sub{color:var(--muted);max-width:70ch;margin:0 0 6px}
+.frame .q{font-family:var(--font-mono);font-size:12.5px;color:var(--ink-2);background:var(--panel-2);border:1px dashed var(--line-strong);border-radius:8px;padding:10px 12px;max-width:78ch}
+.protolabel{display:inline-block;font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--warn-fg);background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:var(--r-pill);padding:2px 10px;margin-bottom:10px}
+
+/* variant header */
+.vhead{display:flex;align-items:baseline;gap:12px;margin:26px 0 4px;flex-wrap:wrap}
+.vhead .vkey{font-family:var(--font-disp);font-weight:700;font-size:22px;color:var(--accent)}
+.vhead .vname{font-family:var(--font-disp);font-weight:700;font-size:20px}
+.vhead .vtag{font-family:var(--font-mono);font-size:11.5px;color:var(--muted)}
+.vlede{color:var(--ink-2);max-width:72ch;margin:0 0 14px}
+
+/* ── App mockup shell ── */
+.mock{display:flex;border:1px solid var(--line);border-radius:var(--r-card);overflow:hidden;background:var(--paper);box-shadow:var(--shadow)}
+.side{width:64px;background:var(--panel-2);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:6px;flex-shrink:0}
+.side .navi{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--muted)}
+.side .navi.on{background:var(--accent-soft);color:var(--accent-strong)}
+.side svg{width:20px;height:20px}
+.main{flex:1;padding:16px 18px;min-width:0}
+.surf{margin-bottom:18px}
+.surf-cap{font-family:var(--font-mono);font-size:11px;letter-spacing:.06em;color:var(--faint);text-transform:uppercase;margin:0 0 6px;display:flex;gap:8px;align-items:center}
+.callout{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:50%;background:var(--warn-fg);color:var(--warn-bg);font-family:var(--font-mono);font-size:11px;flex-shrink:0}
+
+/* app components (faithful recreations) */
+.controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-card);padding:10px 12px}
+.btn{display:inline-flex;align-items:center;gap:7px;border-radius:var(--r-btn);border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-2);padding:7px 13px;font-size:13.5px;cursor:default}
+.btn svg{width:15px;height:15px}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.sp{flex:1}
+.select{border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-2);border-radius:var(--r-btn);padding:6px 10px;font-size:13px;font-family:var(--font-ui)}
+.switch{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--ink-2)}
+.switch .track{width:32px;height:18px;border-radius:var(--r-pill);background:var(--line-strong);position:relative;flex-shrink:0}
+.switch .track::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--panel);box-shadow:var(--shadow-sm)}
+.switch.on .track{background:var(--accent)}
+.switch.on .track::after{left:auto;right:2px}
+.switch.dis{opacity:.55}
+.chip{display:inline-flex;align-items:center;gap:6px;border-radius:var(--r-pill);padding:3px 11px;font-size:12px;background:var(--panel-2);border:1px solid var(--line);color:var(--muted)}
+.chip .dot{font-size:8px}
+.chip-approx{background:var(--accent-tint);border-color:var(--accent-soft);color:var(--accent-strong)}
+.chip-warn{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-fg)}
+.chip-ok{background:var(--ok-soft);border-color:var(--ok-soft);color:var(--ok)}
+
+/* karaoke stage */
+.kara{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-card);padding:26px 18px 20px;text-align:center;position:relative}
+.kara-line{font-family:var(--font-disp);font-weight:700;font-size:30px;letter-spacing:.02em}
+.kara-line .past{color:var(--accent-strong);opacity:.55}
+.kara-line .now{color:var(--accent);display:inline-block;transform:scale(1.22) translateY(-2px)}
+.kara-line .next{color:var(--muted)}
+.kara-next{margin-top:8px;color:var(--faint);font-size:15px}
+.kara-badge{position:absolute;top:10px;right:12px}
+
+/* health panel */
+.health{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-card);overflow:hidden}
+.hrow{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line);font-size:13px}
+.hrow:last-child{border-bottom:none}
+.hrow .nm{color:var(--ink-2)}
+.hrow .why{color:var(--muted);font-size:12.5px}
+.hrow .st{margin-left:auto;flex-shrink:0}
+.hgroup{padding:8px 14px;background:var(--panel-2);border-bottom:1px solid var(--line);color:var(--muted);font-size:12.5px;display:flex;align-items:center;gap:8px;cursor:default}
+.hgroup .tri{font-size:10px;color:var(--faint)}
+.hgroup-body{border-left:3px solid var(--line)}
+.hgroup-body .hrow{background:var(--panel-2)}
+.statusline{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;color:var(--ink-2)}
+
+/* settings row */
+.setrow{display:flex;align-items:center;gap:14px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-card);padding:12px 14px}
+.setrow .t{font-size:13.5px;color:var(--ink)}
+.setrow .d{font-size:12.5px;color:var(--muted);max-width:52ch}
+.setrow.dis .t,.setrow.dis .d{opacity:.55}
+.slider{margin-left:auto;width:150px;height:4px;border-radius:2px;background:var(--line-strong);position:relative;flex-shrink:0}
+.slider::after{content:"";position:absolute;top:-5px;left:70%;width:14px;height:14px;border-radius:50%;background:var(--accent);box-shadow:var(--shadow-sm)}
+.setrow.dis .slider::after{background:var(--faint)}
+.sliderval{font-family:var(--font-mono);font-size:12px;color:var(--muted)}
+.banner{display:flex;gap:10px;background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn-fg);border-radius:10px;padding:10px 12px;font-size:13px;margin-top:10px}
+
+/* explainer */
+.explain{margin-top:14px;border:1px dashed var(--line-strong);border-radius:var(--r-card);background:var(--panel-2);padding:14px 16px}
+.explain h3{font-family:var(--font-mono);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+.explain ol{margin:0;padding-left:0;list-style:none;display:grid;gap:7px}
+.explain li{display:flex;gap:9px;font-size:13.5px;color:var(--ink-2)}
+.explain li>span:last-child{max-width:88ch}
+.explain .plain{margin:10px 0 0;font-size:13.5px;color:var(--ink-2);max-width:88ch}
+.explain .plain b{color:var(--ink)}
+.tradeoff{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.tradeoff .cell{font-size:13px;border-radius:8px;padding:8px 11px}
+.tradeoff .pro{background:var(--ok-soft);color:var(--ok)}
+.tradeoff .con{background:var(--warn-bg);color:var(--warn-fg)}
+@media (max-width:640px){.tradeoff{grid-template-columns:1fr}}
+
+/* comparison table */
+.cmpwrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r-card);margin-top:26px;background:var(--panel)}
+table{border-collapse:collapse;width:100%;font-size:13px;min-width:760px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-family:var(--font-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:400;background:var(--panel-2)}
+td:first-child{color:var(--muted);white-space:nowrap}
+td{color:var(--ink-2)}
+tr:last-child td{border-bottom:none}
+
+/* react box */
+.react{margin-top:26px;border:1px solid var(--accent-soft);background:var(--accent-tint);border-radius:var(--r-card);padding:16px 18px}
+.react h2{font-family:var(--font-disp);font-size:17px;margin:0 0 6px;color:var(--accent-strong)}
+.react p{margin:0 0 6px;max-width:80ch;color:var(--ink-2)}
+
+/* floating switcher */
+.pswitch{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);display:flex;align-items:center;gap:4px;background:var(--ink);color:var(--paper);border-radius:var(--r-pill);padding:6px 8px;box-shadow:var(--shadow);z-index:50}
+.pswitch button{border:none;background:transparent;color:inherit;font-size:16px;width:34px;height:34px;border-radius:50%;cursor:pointer}
+.pswitch button:hover{background:rgba(255,255,255,.14)}
+.pswitch .lab{font-family:var(--font-mono);font-size:12.5px;padding:0 10px;min-width:190px;text-align:center}
+@media (prefers-reduced-motion: no-preference){
+  .variant{animation:fadein .18s ease}
+  @keyframes fadein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+}
+</style>
+
+<div class="frame">
+  <span class="protolabel">Prototype — 3 variants · ← → to switch</span>
+  <h1>Ubuntu 對齊行為 A/B/C</h1>
+  <p class="sub">Wayfinder ticket <b>Choose Ubuntu alignment behaviour</b> · QwenASRMiniTool. Exact word alignment shells out to chatllm's Windows-only <code style="font-family:var(--font-mono)">main.exe</code> (<code style="font-family:var(--font-mono)">fa_aligner.py</code>); every caller already falls back silently to proportional estimation when it is missing. Transcription itself always works — the decision is <b>what Ubuntu presents and promises</b>.</p>
+  <p class="q">Question: support proportional subtitle timing only, adopt a Linux-native aligner within this effort, or offer another clearly bounded behaviour — and how should existing alignment settings recover without changing their Windows meaning?</p>
+
+  <!-- ════════════ VARIANT A ════════════ -->
+  <section class="variant" data-variant="A">
+    <div class="vhead"><span class="vkey">A</span><span class="vname">靜默比例 — Proportional only, invisible</span><span class="vtag">alignment = platform unsupported · zero new surface</span></div>
+    <p class="vlede">Exact alignment is classified <b>platform unsupported</b> on Ubuntu. Per the capability contract, unsupported choices don't appear in selectors — so the 時間軸對齊 switch simply doesn't exist. Word timing is always proportional; the UI never mentions it.</p>
+
+    <div class="mock">
+      <div class="side">
+        <div class="navi on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V6l12 6z" transform="translate(-3 0)"/></svg></div>
+        <div class="navi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 19v3"/></svg></div>
+        <div class="navi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 22h8"/></svg></div>
+      </div>
+      <div class="main">
+        <div class="surf">
+          <p class="surf-cap"><span class="callout">1</span>單檔辨識 · controls</p>
+          <div class="controls">
+            <span class="btn btn-primary"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>開始轉換</span>
+            <span class="btn">開啟輸出資料夾</span>
+            <div class="sp"></div>
+            <span class="select">語言 自動</span>
+            <span class="switch on"><span class="track"></span>說話者分離</span>
+            <span class="select">人數 自動</span>
+            <!-- 時間軸對齊 switch: not rendered on Ubuntu -->
+          </div>
+        </div>
+        <div class="surf">
+          <p class="surf-cap"><span class="callout">2</span>卡拉OK模式</p>
+          <div class="kara">
+            <div class="kara-line"><span class="past">我們終於</span><span class="now">抵</span><span class="next">達了海岸線</span></div>
+            <div class="kara-next">浪聲蓋過了所有的猶豫</div>
+          </div>
+        </div>
+        <div class="surf">
+          <p class="surf-cap"><span class="callout">3</span>模型 · 系統自檢</p>
+          <div class="health">
+            <div class="hrow"><span class="nm">OpenVINO 模型（Qwen3-ASR 0.6B）</span><span class="st chip chip-ok"><span class="dot">●</span>已下載</span></div>
+            <div class="hrow"><span class="nm">VAD（Silero）</span><span class="st chip chip-ok"><span class="dot">●</span>已下載</span></div>
+            <div class="hrow"><span class="nm">FFmpeg（PATH）</span><span class="st chip chip-ok"><span class="dot">●</span>2.1.3</span></div>
+            <div class="hgroup"><span class="tri">▸</span>Windows 專用整合（Ubuntu 不支援）· 3 項 — 不計入健康狀態</div>
+          </div>
+        </div>
+        <div class="surf">
+          <p class="surf-cap"><span class="callout">4</span>設定</p>
+          <div class="setrow" style="border-style:dashed;justify-content:center;color:var(--faint);font-size:12.5px">「每段最長秒數（字級對齊）」列在 Ubuntu 上不顯示（僅精確對齊使用）</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="explain">
+      <h3>Contract</h3>
+      <ol>
+        <li><span class="callout">1</span><span>The align switch is gone. Every request runs the existing proportional path — same code Windows falls back to today.</span></li>
+        <li><span class="callout">2</span><span>Karaoke works, driven by per-character proportional interpolation. No badge, no explanation.</span></li>
+        <li><span class="callout">3</span><span>ForcedAligner appears only inside the collapsed Windows-only group; never a health blocker, never downloadable on Ubuntu.</span></li>
+        <li><span class="callout">4</span><span>The chunk-length slider (tunes exact alignment only) is hidden on Ubuntu.</span></li>
+      </ol>
+      <p class="plain"><b>Settings recovery:</b> <code style="font-family:var(--font-mono)">use_aligner</code> and chunk settings are read but never rewritten; Windows meaning untouched. Nothing Ubuntu-specific is persisted.</p>
+      <div class="tradeoff">
+        <div class="cell pro">＋ Smallest surface: no new prerequisites, no new states, CI can prove all of it headlessly.</div>
+        <div class="cell con">－ Silent quality gap vs Windows on the same file; karaoke drift on long segments has no explanation anywhere in the UI.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ VARIANT B ════════════ -->
+  <section class="variant" data-variant="B" hidden>
+    <div class="vhead"><span class="vkey">B</span><span class="vname">誠實降級 — Honest degraded state</span><span class="vtag">word timing stays a feature · method made visible</span></div>
+    <p class="vlede">Word-level timing is treated as an Ubuntu feature whose <b>method</b> is proportional estimation. The affordance stays, converted from a toggle into a visible state; exact alignment is explained as Windows-only. Nothing new to install.</p>
+
+    <div class="mock">
+      <div class="side">
+        <div class="navi on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V6l12 6z" transform="translate(-3 0)"/></svg></div>
+        <div class="navi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 19v3"/></svg></div>
+        <div class="navi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 22h8"/></svg></div>
+      </div>
+      <div class="main">
+        <div class="surf">
+          <p class="surf-cap"><span class="callout">1</span>單檔辨識 · controls</p>
+          <div class="controls">
+            <span class="btn btn-primary"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>開始轉換</span>
+            <span class="btn">開啟輸出資料夾</span>
+            <div class="sp"></div>
+            <span class="select">語言 自動</span>
+            <span class="switch on"><span class="track"></span>說話者分離</span>
+            <span class="select">人數 自動</span>
+            <span class="chip chip-approx" title="精確字級對齊為 Windows 專用；Ubuntu 以字元比例估算字級時間。">字級時間軸：比例估算 ⓘ</span>
+          </div>
+        </div>
+        <div class="surf">
+          <p class="surf-cap"><span class="callout">2</span>卡拉OK模式</p>
+          <div class="kara">
+            <span class="kara-badge chip chip-approx">≈ 估算</span>
+            <div class="kara-line"><span class="past">我們終於</span><span class="now">抵</span><span class="next">達了海岸線</span></div>
+            <div class="kara-next">浪聲蓋過了所有的猶豫</div>
+          </div>
+        </div>
+        <div class="surf">
+          <p class="surf-cap"><span class="callout">3</span>模型 · 系統自檢</p>
+          <div class="health">
+            <div class="hrow"><span class="nm">OpenVINO 模型（Qwen3-ASR 0.6B）</span><span class="st chip chip-ok"><span class="dot">●</span>已下載</span></div>
+            <div class="hrow"><span class="nm">VAD（Silero）</span><span class="st chip chip-ok"><span class="dot">●</span>已下載</span></div>
+            <div class="hrow"><span class="nm">FFmpeg（PATH）</span><span class="st chip chip-ok"><span class="dot">●</span>2.1.3</span></div>
+            <div class="hgroup"><span class="tri">▾</span>Windows 專用整合（Ubuntu 不支援）— 不計入健康狀態</div>
+            <div class="hgroup-body">
+              <div class="hrow"><span class="nm">精確字級對齊（ForcedAligner）</span><span class="why">Windows 專用 main.exe · Ubuntu 以比例估算取代</span><span class="st chip"><span class="dot">●</span>不支援</span></div>
+            </div>
+          </div>
+          <div class="statusline"><span class="chip chip-approx">ⓘ</span>精確字級對齊在 Ubuntu 不可用 · Windows 設定已保留</div>
+        </div>
+        <div class="surf">
+          <p class="surf-cap"><span class="callout">4</span>設定</p>
+          <div class="setrow dis">
+            <div><div class="t">每段最長秒數（字級對齊）</div><div class="d">僅精確對齊使用 — Ubuntu 目前為比例估算，此設定不生效（值已保留）</div></div>
+            <div class="slider"></div><span class="sliderval">30s</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="explain">
+      <h3>Contract</h3>
+      <ol>
+        <li><span class="callout">1</span><span>The toggle becomes a read-only state chip with an info popover. No dead switch, no pretending: the method is named where the old control sat.</span></li>
+        <li><span class="callout">2</span><span>Karaoke carries a small ≈ badge — the one place users would otherwise blame drift on a bug.</span></li>
+        <li><span class="callout">3</span><span>The collapsed Windows-only row explains the replacement; a persistent one-line status mirrors "Using OpenVINO CPU on Ubuntu · Windows preference preserved".</span></li>
+        <li><span class="callout">4</span><span>The chunk slider is visible but inert, with the reason and the preserved value shown.</span></li>
+      </ol>
+      <p class="plain"><b>Settings recovery:</b> same as A — preference preserved, never rewritten. The effective method (proportional) is derived per session, mirroring the backend-preference / effective-backend pattern from the capability contract.</p>
+      <div class="tradeoff">
+        <div class="cell pro">＋ Honest: Windows and Ubuntu output differences are explained in place; fewer "karaoke timing is broken" reports; still zero new prerequisites.</div>
+        <div class="cell con">－ Slightly noisier UI; still no path to exact timing on Ubuntu — power users (lyrics/karaoke) get transparency, not parity.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ VARIANT C ════════════ -->
+  <section class="variant" data-variant="C" hidden>
+    <div class="vhead"><span class="vkey">C</span><span class="vname">自備對齊器 — Bring-your-own aligner</span><span class="vtag">alignment = machine unavailable · PATH discovery like FFmpeg</span></div>
+    <p class="vlede">Exact alignment is classified <b>machine unavailable</b> rather than platform unsupported: chatllm builds on Linux, so if the user puts a chatllm executable on <code style="font-family:var(--font-mono)">PATH</code>, the app runs the same FA model it already downloads (CPU, <code style="font-family:var(--font-mono)">-ngl 0</code>) and Ubuntu matches Windows exactly. Until then, behaviour is B.</p>
+
+    <div class="mock">
+      <div class="side">
+        <div class="navi on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V6l12 6z" transform="translate(-3 0)"/></svg></div>
+        <div class="navi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 19v3"/></svg></div>
+        <div class="navi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 22h8"/></svg></div>
+      </div>
+      <div class="main">
+        <div class="surf">
+          <p class="surf-cap"><span class="callout">1</span>單檔辨識 · controls（未偵測到對齊器時）</p>
+          <div class="controls">
+            <span class="btn btn-primary"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>開始轉換</span>
+            <span class="btn">開啟輸出資料夾</span>
+            <div class="sp"></div>
+            <span class="select">語言 自動</span>
+            <span class="switch on"><span class="track"></span>說話者分離</span>
+            <span class="select">人數 自動</span>
+            <span class="switch dis" title="需自備 chatllm 對齊器 — 見「模型」頁"><span class="track"></span>時間軸對齊 <span class="chip chip-warn" style="padding:1px 8px">需設定</span></span>
+          </div>
+        </div>
+        <div class="surf">
+          <p class="surf-cap"><span class="callout">2</span>卡拉OK模式（提供對齊器後 — 與 Windows 相同，無標記）</p>
+          <div class="kara">
+            <div class="kara-line"><span class="past">我們終於</span><span class="now">抵</span><span class="next">達了海岸線</span></div>
+            <div class="kara-next">浪聲蓋過了所有的猶豫</div>
+          </div>
+        </div>
+        <div class="surf">
+          <p class="surf-cap"><span class="callout">3</span>模型 · 系統自檢</p>
+          <div class="health">
+            <div class="hrow"><span class="nm">OpenVINO 模型（Qwen3-ASR 0.6B）</span><span class="st chip chip-ok"><span class="dot">●</span>已下載</span></div>
+            <div class="hrow"><span class="nm">FA 模型（qwen3-focedaligner .bin）</span><span class="why">App 自動下載，與 Windows 共用</span><span class="st chip chip-ok"><span class="dot">●</span>已下載</span></div>
+            <div class="hrow"><span class="nm">精確字級對齊（chatllm 執行檔 · PATH）</span><span class="why">未偵測到 — 自行編譯 chatllm.cpp 並放入 PATH 後即啟用</span><span class="st chip chip-warn"><span class="dot">●</span>需自備</span></div>
+            <div class="hrow"><span class="nm">FFmpeg（PATH）</span><span class="st chip chip-ok"><span class="dot">●</span>2.1.3</span></div>
+            <div class="hgroup"><span class="tri">▸</span>Windows 專用整合（Ubuntu 不支援）· 2 項 — 不計入健康狀態</div>
+          </div>
+          <div class="banner">⚠️ 「需自備」不列入健康阻斷：未提供對齊器時一切功能照常，字級時間以比例估算。</div>
+        </div>
+        <div class="surf">
+          <p class="surf-cap"><span class="callout">4</span>設定</p>
+          <div class="setrow">
+            <div><div class="t">每段最長秒數（字級對齊）</div><div class="d">偵測到對齊器時生效；未偵測到時保留設定值</div></div>
+            <div class="slider"></div><span class="sliderval">30s</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="explain">
+      <h3>Contract</h3>
+      <ol>
+        <li><span class="callout">1</span><span>The switch stays but is disabled with a "needs setup" chip while no aligner is on PATH — machine unavailable, visible with remedy, per the capability contract.</span></li>
+        <li><span class="callout">2</span><span>With an aligner present, karaoke and SRT word timing are exact — byte-for-byte the Windows pipeline (same FA .bin, same subprocess protocol, CPU <code style="font-family:var(--font-mono)">-ngl 0</code>). Without one, presentation falls back to B (≈ badge).</span></li>
+        <li><span class="callout">3</span><span>Discovery follows the FFmpeg/cloudflared precedent: executable from PATH, model downloaded by the app. The app never downloads or builds the binary itself.</span></li>
+        <li><span class="callout">4</span><span>Chunk slider stays live; it applies whenever exact alignment runs.</span></li>
+      </ol>
+      <p class="plain"><b>Settings recovery:</b> preference and chunk values preserved unchanged; aligner discovery is per-machine (PATH), nothing persisted that could leak an Ubuntu path into Windows settings.</p>
+      <div class="tradeoff">
+        <div class="cell pro">＋ A bounded road to full Windows parity for lyrics/karaoke users; no new app-managed binaries; degrades to B, never blocks.</div>
+        <div class="cell con">－ Asks users to compile a C++ project; version/flag/output drift of foreign binaries becomes a support surface; CI can't prove the exact path without building chatllm — and the effort declared chatllm backends out of scope (aligner-as-tool is arguably different, but that's the call).</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ Comparison ════════════ -->
+  <div class="cmpwrap">
+    <table>
+      <thead><tr><th></th><th>A 靜默比例</th><th>B 誠實降級</th><th>C 自備對齊器</th></tr></thead>
+      <tbody>
+        <tr><td>① 對齊 affordance</td><td>Removed</td><td>State chip「比例估算 ⓘ」</td><td>Switch, disabled until aligner found</td></tr>
+        <tr><td>② 卡拉OK / 字級 SRT</td><td>Proportional, unmarked</td><td>Proportional, ≈ badge</td><td>Exact when provided; else = B</td></tr>
+        <tr><td>③ 系統自檢</td><td>Collapsed Windows-only row</td><td>Collapsed row + status line</td><td>Visible「需自備」row with remedy</td></tr>
+        <tr><td>④ 每段最長秒數 slider</td><td>Hidden</td><td>Visible, inert, reason shown</td><td>Live</td></tr>
+        <tr><td>Capability state</td><td>platform unsupported</td><td>platform unsupported (method visible)</td><td>machine unavailable</td></tr>
+        <tr><td>Windows settings</td><td colspan="3">Preserved verbatim in all three — effective behaviour derived per session, never written back</td></tr>
+        <tr><td>New Ubuntu prerequisite</td><td>None</td><td>None</td><td>Optional user-built chatllm on PATH</td></tr>
+        <tr><td>CI provability</td><td>Full</td><td>Full</td><td>Fallback full; exact path needs a built binary</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="react">
+    <h2>React</h2>
+    <p>Flip with ← → or the bar below. The variants disagree on structure: A removes the affordance, B turns it into an honest state, C turns it into a provisionable capability (C contains B as its fallback).</p>
+    <p><b>The one question that decides this ticket:</b> is a user-provided chatllm executable on PATH in scope for Ubuntu support — or does "chatllm is out of scope" cover the aligner too, leaving proportional (A or B) as the whole story?</p>
+  </div>
+</div>
+
+<div class="pswitch" role="navigation" aria-label="Prototype variant switcher">
+  <button id="prev" aria-label="Previous variant">←</button>
+  <span class="lab" id="lab">A — 靜默比例</span>
+  <button id="next" aria-label="Next variant">→</button>
+</div>
+
+<script>
+(function(){
+  var names={A:"A — 靜默比例",B:"B — 誠實降級",C:"C — 自備對齊器"};
+  var keys=["A","B","C"];
+  var cur="A";
+  try{
+    var p=new URLSearchParams(location.search).get("variant");
+    if(p&&names[p.toUpperCase()])cur=p.toUpperCase();
+  }catch(e){}
+  function show(k){
+    cur=k;
+    document.querySelectorAll(".variant").forEach(function(el){el.hidden=el.getAttribute("data-variant")!==k;});
+    document.getElementById("lab").textContent=names[k];
+    try{history.replaceState(null,"","?variant="+k);}catch(e){}
+  }
+  function step(d){show(keys[(keys.indexOf(cur)+d+3)%3]);}
+  document.getElementById("prev").addEventListener("click",function(){step(-1);});
+  document.getElementById("next").addEventListener("click",function(){step(1);});
+  document.addEventListener("keydown",function(e){
+    var t=e.target;
+    if(t&&(t.tagName==="INPUT"||t.tagName==="TEXTAREA"||t.isContentEditable))return;
+    if(e.key==="ArrowLeft")step(-1);
+    if(e.key==="ArrowRight")step(1);
+  });
+  show(cur);
+})();
+</script>
