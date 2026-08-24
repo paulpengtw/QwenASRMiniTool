@@ -22,6 +22,7 @@ An implementation-ready decision map for Ubuntu source support: Ubuntu 24.04 x86
 - [Establish the Ubuntu 24.04 prerequisite matrix](issues/01-establish-ubuntu-prerequisite-matrix.md): Ubuntu 24.04, Python 3.12, and OpenVINO CPU are viable with explicit OS prerequisites, corrected direct dependencies, shared VAD bootstrap, and no Windows-binary fallback on Linux.
 - [Choose the Ubuntu browser lifecycle contract](issues/02-choose-browser-lifecycle-contract.md): One local process owns a reconnectable browser app session with explicit, bounded shutdown; browser tabs do not own server or non-recording job lifetime.
 - [Define capability presentation and settings recovery](issues/03-define-capability-presentation-and-settings-recovery.md): Ubuntu exposes only supported choices, derives OpenVINO CPU without overwriting Windows intent, and renders backend-owned capability, setup, recovery, and health states.
+- [Choose Ubuntu alignment behaviour](issues/08-choose-ubuntu-alignment-behaviour.md): Ubuntu keeps word-level timing as visibly proportional estimation — exact alignment stays Windows-only, its settings preserved but inert, and no Linux aligner is adopted.
 
 ## Not yet specified
 
@@ -35,3 +36,4 @@ An implementation-ready decision map for Ubuntu source support: Ubuntu 24.04 x86
 - Linux CrispASR, chatllm, Vulkan, or CUDA inference backends; OpenVINO CPU is the Ubuntu backend for this effort.
 - A native Ubuntu desktop window or the legacy CustomTkinter UI as the official Ubuntu experience; the browser UI is the supported surface.
 - Ubuntu releases other than 24.04, architectures other than x86-64, and Linux distributions other than Ubuntu.
+- Exact forced word alignment on Ubuntu, whether by a Linux-native or user-provided chatllm aligner executable; Ubuntu presents proportional timing honestly ([Choose Ubuntu alignment behaviour](issues/08-choose-ubuntu-alignment-behaviour.md)).
