@@ -21,10 +21,11 @@ An implementation-ready decision map for Ubuntu source support: Ubuntu 24.04 x86
 
 - [Establish the Ubuntu 24.04 prerequisite matrix](issues/01-establish-ubuntu-prerequisite-matrix.md): Ubuntu 24.04, Python 3.12, and OpenVINO CPU are viable with explicit OS prerequisites, corrected direct dependencies, shared VAD bootstrap, and no Windows-binary fallback on Linux.
 - [Choose the Ubuntu browser lifecycle contract](issues/02-choose-browser-lifecycle-contract.md): One local process owns a reconnectable browser app session with explicit, bounded shutdown; browser tabs do not own server or non-recording job lifetime.
+- [Define capability presentation and settings recovery](issues/03-define-capability-presentation-and-settings-recovery.md): Ubuntu exposes only supported choices, derives OpenVINO CPU without overwriting Windows intent, and renders backend-owned capability, setup, recovery, and health states.
 
 ## Not yet specified
 
-- The implementation sequence and code-change boundaries cannot be fixed until the capability, bootstrap, reconnectable-work, cancellation, and platform-seam decisions are resolved.
+- The implementation sequence and code-change boundaries cannot be fixed until the settings-schema, bootstrap, reconnectable-work, cancellation, and platform-seam decisions are resolved.
 - The exact automated test layers, fixtures, and CI jobs depend on which shared seams the platform design exposes.
 - Documentation structure and troubleshooting guidance depend on the final prerequisite and first-run contracts.
 

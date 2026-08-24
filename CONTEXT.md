@@ -27,3 +27,15 @@ _Avoid_: App readiness
 **Transcription job**:
 A unit of transcription work owned by the local app session and observable from any connected browser client.
 _Avoid_: Browser request, tab task
+
+**Capability state**:
+The classification of a backend or feature as ready, setup required, machine unavailable, or platform unsupported for the current platform and machine.
+_Avoid_: Availability, readiness
+
+**Backend preference**:
+The user's persisted backend choice, retained even when that backend cannot run on the current platform.
+_Avoid_: Active backend, effective backend
+
+**Effective backend**:
+The backend selected for the current local app session after evaluating capability state, without overwriting the backend preference.
+_Avoid_: Backend preference, saved backend
