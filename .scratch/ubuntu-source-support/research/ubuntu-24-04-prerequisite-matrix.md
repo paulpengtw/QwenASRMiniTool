@@ -1,6 +1,6 @@
 # Ubuntu 24.04 prerequisite matrix
 
-Research date: 2026-08-24  
+Research date: 2026-08-24
 Target: Ubuntu 24.04 LTS, x86-64, source installation, browser UI, OpenVINO CPU. Windows behavior and settings remain compatible. Models/VAD are application-managed; FFmpeg and optional `cloudflared` are discovered through `PATH`.
 
 ## Recommendation
