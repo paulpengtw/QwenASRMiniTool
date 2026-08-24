@@ -2,6 +2,7 @@
 
 Type: prototype
 Status: open
+Assignee: claude (session b1516093)
 Blocked by: 03
 
 ## Question
