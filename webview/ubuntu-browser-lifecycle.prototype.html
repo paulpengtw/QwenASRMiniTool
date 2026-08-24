@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PROTOTYPE — Ubuntu browser lifecycle</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #173432;
+      --muted: #617573;
+      --line: #d8e3e1;
+      --paper: #ffffff;
+      --wash: #f3f8f7;
+      --accent: #0f766e;
+      --accent-soft: #dff3f0;
+      --warn: #9a6700;
+      --warn-soft: #fff4cf;
+      --danger: #a33a32;
+      --danger-soft: #fde8e5;
+      --shadow: 0 14px 40px rgba(23, 52, 50, 0.09);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--wash);
+      color: var(--ink);
+      font: 15px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    button, select { font: inherit; }
+    button { cursor: pointer; }
+    .shell { width: min(1180px, calc(100% - 32px)); margin: 32px auto 72px; }
+    .eyebrow {
+      display: inline-flex;
+      padding: 5px 9px;
+      border: 1px solid #d7b66d;
+      border-radius: 999px;
+      color: #7a5411;
+      background: #fff9e9;
+      font-size: 12px;
+      font-weight: 750;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    h1 { margin: 12px 0 8px; font-size: clamp(28px, 4vw, 44px); line-height: 1.08; letter-spacing: -.035em; }
+    h2 { margin: 0 0 14px; font-size: 19px; letter-spacing: -.015em; }
+    h3 { margin: 0 0 8px; font-size: 15px; }
+    p { margin: 0; }
+    .lede { max-width: 850px; color: var(--muted); font-size: 17px; }
+    .question {
+      margin-top: 22px;
+      padding: 18px 20px;
+      border-left: 4px solid var(--accent);
+      background: var(--paper);
+      border-radius: 0 12px 12px 0;
+      box-shadow: var(--shadow);
+    }
+    .question strong { display: block; margin-bottom: 5px; color: var(--accent); }
+    .recommendation {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .rule {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255,255,255,.72);
+    }
+    .rule b { display: block; margin-bottom: 3px; font-size: 12px; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; }
+    .rule span { font-size: 13px; color: var(--muted); }
+    .verdict { margin-top: 18px; }
+    .verdict-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 22px; margin: 0; padding-left: 21px; }
+    .verdict-list li { padding-left: 2px; color: var(--muted); }
+    .verdict-list strong { color: var(--ink); }
+    .layout { display: grid; grid-template-columns: 1.05fr .95fr; gap: 18px; margin-top: 22px; align-items: start; }
+    .stack { display: grid; gap: 18px; }
+    .panel {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+    }
+    .state-hero { display: flex; justify-content: space-between; gap: 14px; align-items: center; margin-bottom: 16px; }
+    .phase {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 11px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 750;
+    }
+    .phase::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+    .phase[data-tone="warn"] { background: var(--warn-soft); color: var(--warn); }
+    .phase[data-tone="danger"] { background: var(--danger-soft); color: var(--danger); }
+    .state-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .datum { min-height: 72px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fbfdfd; }
+    .datum dt { margin: 0 0 4px; color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+    .datum dd { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+    .change { margin-top: 12px; padding: 12px; border-radius: 10px; background: var(--accent-soft); color: #225b56; }
+    .change.invalid { background: var(--danger-soft); color: var(--danger); }
+    .actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .btn {
+      min-height: 42px;
+      padding: 9px 11px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #fff;
+      color: var(--ink);
+      font-weight: 670;
+      text-align: left;
+    }
+    .btn:hover { border-color: #83bdb7; background: #f8fcfb; }
+    .btn.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+    .btn.danger { border-color: #e7b6b0; color: var(--danger); background: #fffafa; }
+    .btn:disabled { cursor: not-allowed; opacity: .43; }
+    .policies { display: grid; gap: 10px; }
+    .policy { display: grid; grid-template-columns: 150px 1fr; gap: 12px; align-items: center; }
+    .policy label { font-weight: 700; }
+    select { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px; background: white; color: var(--ink); }
+    .hint { margin-top: 12px; color: var(--muted); font-size: 13px; }
+    .tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 3px; }
+    .tab { white-space: nowrap; padding: 8px 10px; border: 1px solid var(--line); border-radius: 999px; background: white; color: var(--muted); }
+    .tab.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 750; }
+    .scenario { margin-top: 16px; }
+    .scenario-copy { min-height: 70px; color: var(--muted); }
+    .steps { display: grid; gap: 8px; margin-top: 12px; }
+    .step {
+      display: grid;
+      grid-template-columns: 28px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+    .step.current { border-color: var(--accent); background: #f8fcfb; }
+    .step.done { opacity: .55; }
+    .step-number { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--wash); font-size: 12px; font-weight: 800; }
+    .step button { padding: 7px 10px; border: 1px solid var(--accent); border-radius: 8px; color: var(--accent); background: #fff; font-weight: 700; }
+    .log { max-height: 270px; overflow: auto; margin: 0; padding: 0; list-style: none; }
+    .log li { display: grid; grid-template-columns: 26px 1fr; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); }
+    .log li:first-child { border-top: 0; }
+    .log-num { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .footer-note { margin-top: 18px; color: var(--muted); font-size: 13px; }
+    code { padding: 2px 5px; border-radius: 5px; background: #edf4f3; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+
+    @media (max-width: 900px) {
+      .recommendation { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .layout { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 620px) {
+      .shell { width: min(100% - 20px, 1180px); margin-top: 18px; }
+      .recommendation, .state-grid, .actions, .verdict-list { grid-template-columns: 1fr; }
+      .policy { grid-template-columns: 1fr; gap: 4px; }
+      .step { grid-template-columns: 28px 1fr; }
+      .step button { grid-column: 2; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <span class="eyebrow">Throwaway logic prototype</span>
+    <h1>Ubuntu browser lifecycle</h1>
+    <p class="lede">Drive the local app process and its browser clients through launch, reconnect, failure, and shutdown. This prototype changes no production code and stores nothing.</p>
+
+    <section class="question">
+      <strong>Question this prototype answers</strong>
+      Does it feel right for the local app process to own the loopback server while browser tabs remain disposable clients—so closing a tab does not silently kill work, relaunch reuses the running server, and only an explicit quit ends the app session?
+    </section>
+
+    <section class="recommendation" aria-label="Recommended contract">
+      <div class="rule"><b>Ready means</b><span>The local UI/API responds; model loading is a separate state.</span></div>
+      <div class="rule"><b>Close tab</b><span>Keep the local app alive and allow a later reconnect.</span></div>
+      <div class="rule"><b>Relaunch</b><span>Open the existing local app instead of starting a second server.</span></div>
+      <div class="rule"><b>Quit</b><span>Use an explicit UI action or terminal signal; confirm active work.</span></div>
+      <div class="rule"><b>Open failure</b><span>Print the URL and keep listening for a manual browser connection.</span></div>
+    </section>
+
+    <section class="panel verdict">
+      <h2>Validated verdict</h2>
+      <ul class="verdict-list">
+        <li><strong>Session ownership:</strong> the process and loopback server own the local app session; tabs are disposable clients.</li>
+        <li><strong>Readiness:</strong> UI/API readiness is independent from model readiness.</li>
+        <li><strong>No clients:</strong> closing every tab leaves the app and non-recording jobs alive until explicit exit.</li>
+        <li><strong>Recording:</strong> closing its capturing tab stops the microphone but retains completed segments for reconnection.</li>
+        <li><strong>Relaunch:</strong> reuse a healthy session; replace stale ownership and start fresh when health fails.</li>
+        <li><strong>Reconnect:</strong> recover server-owned job progress/results for the lifetime of the local app session.</li>
+        <li><strong>Quit authority:</strong> every loopback client is trusted; destructive actions identify affected work and require confirmation.</li>
+        <li><strong>Failure boundary:</strong> startup failures exit non-zero; model failures stay inside the ready UI.</li>
+        <li><strong>Shutdown:</strong> notify clients, reject new work, cancel authorized work, stop child services, flush writes, then stop HTTP.</li>
+        <li><strong>Bounded exit:</strong> allow 10 seconds, with forced second interrupt; use exit codes 0, 130, 143, or non-zero failure.</li>
+      </ul>
+    </section>
+
+    <div class="layout">
+      <div class="stack">
+        <section class="panel">
+          <div class="state-hero">
+            <div>
+              <h2>Current app session</h2>
+              <p class="hint">A browser tab is a client, not the app process itself.</p>
+            </div>
+            <span class="phase" id="phase-pill">Stopped</span>
+          </div>
+          <dl class="state-grid" id="state-grid"></dl>
+          <div class="change" id="last-change">Reset to a known stopped state.</div>
+        </section>
+
+        <section class="panel">
+          <h2>Free play</h2>
+          <div class="actions" id="free-actions"></div>
+          <p class="hint">All actions stay visible. Illegal transitions are rejected and explained, because that is often where the contract feels wrong.</p>
+        </section>
+
+        <section class="panel">
+          <h2>Compare policy choices</h2>
+          <div class="policies">
+            <div class="policy">
+              <label for="last-tab-policy">Last tab closes</label>
+              <select id="last-tab-policy">
+                <option value="keep-alive">Keep app alive (recommended)</option>
+                <option value="grace-period">Stop after a grace period</option>
+                <option value="stop-now">Stop immediately</option>
+              </select>
+            </div>
+            <div class="policy">
+              <label for="relaunch-policy">Relaunch</label>
+              <select id="relaunch-policy">
+                <option value="reuse">Reuse running app (recommended)</option>
+                <option value="refuse">Refuse with existing URL</option>
+                <option value="parallel">Start another app process</option>
+              </select>
+            </div>
+            <div class="policy">
+              <label for="open-failure-policy">Browser fails to open</label>
+              <select id="open-failure-policy">
+                <option value="show-url">Keep server and show URL (recommended)</option>
+                <option value="exit">Stop with a non-zero exit</option>
+              </select>
+            </div>
+          </div>
+          <p class="hint">Changing a policy resets the demo so each comparison starts from the same state.</p>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="panel">
+          <h2>Guided walkthroughs</h2>
+          <div class="tabs" id="scenario-tabs"></div>
+          <div class="scenario">
+            <h3 id="scenario-title"></h3>
+            <p class="scenario-copy" id="scenario-copy"></p>
+            <div class="steps" id="scenario-steps"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Transition history</h2>
+          <ol class="log" id="history"></ol>
+        </section>
+      </div>
+    </div>
+
+    <p class="footer-note">Terminology under test: a <strong>local app session</strong> is the lifetime of the Python process and loopback server; a <strong>browser client</strong> is a connected tab. Closing one must not be described as “closing the app” unless the chosen policy actually ends the local app session.</p>
+  </main>
+
+  <script>
+    // Portable state machine under test. It has no DOM or browser dependencies.
+    const Lifecycle = (() => {
+      const DEFAULT_POLICY = Object.freeze({
+        lastTab: "keep-alive",
+        relaunch: "reuse",
+        openFailure: "show-url",
+      });
+
+      function initial(policy = DEFAULT_POLICY) {
+        return {
+          phase: "stopped",
+          server: "down",
+          browserClients: 0,
+          model: "not loaded",
+          work: "idle",
+          url: "—",
+          generation: 0,
+          exitReason: "—",
+          policy: { ...DEFAULT_POLICY, ...policy },
+          lastChange: "Reset to a known stopped state.",
+          invalid: false,
+          history: [],
+        };
+      }
+
+      function record(state, action, message, patch = {}, invalid = false) {
+        const entry = `${action}: ${message}`;
+        return {
+          ...state,
+          ...patch,
+          policy: patch.policy ? { ...patch.policy } : state.policy,
+          lastChange: message,
+          invalid,
+          history: [...state.history, entry],
+        };
+      }
+
+      function reject(state, action, why) {
+        return record(state, action, `Ignored — ${why}`, {}, true);
+      }
+
+      function transition(state, action) {
+        switch (action.type) {
+          case "LAUNCH":
+            if (["starting", "waiting-for-browser", "running", "grace-period", "confirming-exit", "stopping"].includes(state.phase)) {
+              if (state.policy.relaunch === "reuse" && state.server === "ready") {
+                return record(state, action.type, "Reused the existing server and requested another browser client.");
+              }
+              if (state.policy.relaunch === "refuse") {
+                return reject(state, action.type, `an app session already owns ${state.url}`);
+              }
+              if (state.policy.relaunch === "parallel") {
+                return record(state, action.type, "A second independent app process would start (shown as a warning, not simulated).", {}, true);
+              }
+              return reject(state, action.type, "the existing app is not ready to reuse yet");
+            }
+            return record(state, action.type, "Started the local process; the browser is not opened until the loopback server is ready.", {
+              phase: "starting",
+              server: "starting",
+              browserClients: 0,
+              model: "not loaded",
+              work: "idle",
+              url: "—",
+              generation: state.generation + 1,
+              exitReason: "—",
+            });
+
+          case "SERVER_READY":
+            if (state.phase !== "starting") return reject(state, action.type, "the server is not starting");
+            return record(state, action.type, "The UI/API is ready. Model loading remains independent. Now attempt to open the browser.", {
+              phase: "waiting-for-browser",
+              server: "ready",
+              url: `http://127.0.0.1:${8764 + state.generation}/`,
+            });
+
+          case "STARTUP_FAILED":
+            if (state.phase !== "starting") return reject(state, action.type, "there is no startup in progress");
+            return record(state, action.type, "Startup failed before a browser opened; report the cause in the terminal and exit non-zero.", {
+              phase: "failed", server: "down", url: "—", exitReason: "startup failure",
+            });
+
+          case "AUTO_OPENED":
+            if (state.phase !== "waiting-for-browser") return reject(state, action.type, "the server is not waiting for its first browser client");
+            return record(state, action.type, "The first browser client connected. The app can be used while the model is still unloaded or loading.", {
+              phase: "running", browserClients: 1,
+            });
+
+          case "AUTO_OPEN_FAILED":
+            if (state.phase !== "waiting-for-browser") return reject(state, action.type, "no automatic browser open is pending");
+            if (state.policy.openFailure === "exit") {
+              return record(state, action.type, "No browser opened, so the process stopped with a non-zero exit.", {
+                phase: "failed", server: "down", url: "—", exitReason: "browser unavailable",
+              });
+            }
+            return record(state, action.type, `The server stays ready. Print ${state.url} and Ctrl+C instructions for manual connection.`);
+
+          case "CLIENT_CONNECTED":
+            if (state.server !== "ready" || ["confirming-exit", "stopping"].includes(state.phase)) {
+              return reject(state, action.type, "the local server is not accepting browser clients");
+            }
+            return record(state, action.type, "A browser client connected or reconnected to the existing app session.", {
+              phase: "running", browserClients: state.browserClients + 1,
+            });
+
+          case "CLIENT_CLOSED": {
+            if (state.browserClients < 1) return reject(state, action.type, "there is no connected browser client");
+            const remaining = state.browserClients - 1;
+            if (remaining > 0) {
+              return record(state, action.type, `${remaining} browser client(s) remain; the app session continues.`, { browserClients: remaining });
+            }
+            if (state.policy.lastTab === "stop-now") {
+              return record(state, action.type, "The last browser client closed, so shutdown began immediately—even if work was active.", {
+                phase: "stopping", server: "stopping", browserClients: 0, exitReason: "last browser closed",
+              }, state.work === "active");
+            }
+            if (state.policy.lastTab === "grace-period") {
+              return record(state, action.type, "No browser clients remain. A grace-period countdown started; reconnecting cancels it.", {
+                phase: "grace-period", browserClients: 0,
+              });
+            }
+            return record(state, action.type, "No browser clients remain, but the local app and any work stay alive for a later reconnect.", {
+              phase: "waiting-for-browser", browserClients: 0,
+            });
+          }
+
+          case "GRACE_EXPIRED":
+            if (state.phase !== "grace-period") return reject(state, action.type, "there is no shutdown grace period");
+            if (state.work === "active") return reject(state, action.type, "active work prevents unattended grace-period shutdown");
+            return record(state, action.type, "The grace period expired while idle; shutdown began.", {
+              phase: "stopping", server: "stopping", exitReason: "idle grace expired",
+            });
+
+          case "MODEL_LOADING":
+            if (state.server !== "ready") return reject(state, action.type, "the local UI/API is not ready");
+            return record(state, action.type, "Model loading started without changing app readiness.", { model: "loading" });
+
+          case "MODEL_READY":
+            if (state.model !== "loading") return reject(state, action.type, "the model is not loading");
+            return record(state, action.type, "The model is ready for transcription.", { model: "ready" });
+
+          case "WORK_STARTED":
+            if (state.server !== "ready") return reject(state, action.type, "the local server is not ready");
+            if (state.model !== "ready") return reject(state, action.type, "the model is not ready");
+            if (state.work !== "idle") return reject(state, action.type, "work is already active");
+            return record(state, action.type, "A transcription started. Closing a browser client must not silently kill it.", { work: "active" });
+
+          case "WORK_FINISHED":
+            if (state.work !== "active") return reject(state, action.type, "there is no active transcription");
+            return record(state, action.type, "The active transcription finished.", { work: "idle" });
+
+          case "REQUEST_QUIT":
+            if (state.server !== "ready") return reject(state, action.type, "there is no running app session to quit");
+            if (state.work === "active") {
+              return record(state, action.type, "Explicit quit requested during active work. Ask whether to cancel work and exit.", {
+                phase: "confirming-exit",
+              });
+            }
+            return record(state, action.type, "Explicit quit accepted; stop accepting work and begin graceful shutdown.", {
+              phase: "stopping", server: "stopping", exitReason: "explicit quit",
+            });
+
+          case "CANCEL_QUIT":
+            if (state.phase !== "confirming-exit") return reject(state, action.type, "no quit confirmation is open");
+            return record(state, action.type, "Quit was cancelled; active work and the app session continue.", {
+              phase: state.browserClients > 0 ? "running" : "waiting-for-browser",
+            });
+
+          case "CONFIRM_QUIT":
+            if (state.phase !== "confirming-exit") return reject(state, action.type, "no quit confirmation is open");
+            return record(state, action.type, "Cancel active work, stop optional child services, then stop the loopback server.", {
+              phase: "stopping", server: "stopping", work: "cancelling", exitReason: "confirmed quit",
+            });
+
+          case "TERMINAL_STOP":
+            if (!["starting", "waiting-for-browser", "running", "grace-period", "confirming-exit"].includes(state.phase)) {
+              return reject(state, action.type, "the process is not running");
+            }
+            return record(state, action.type, "Ctrl+C or SIGTERM triggers the same cleanup without an interactive prompt.", {
+              phase: "stopping", server: state.server === "down" ? "down" : "stopping",
+              work: state.work === "active" ? "cancelling" : state.work,
+              exitReason: "terminal signal",
+            });
+
+          case "SHUTDOWN_COMPLETE":
+            if (state.phase !== "stopping") return reject(state, action.type, "shutdown has not started");
+            return record(state, action.type, "The server and process stopped. Any still-open page shows a disconnected/stopped state and can offer relaunch instructions.", {
+              phase: "stopped", server: "down", work: "idle", model: "not loaded", url: "—",
+            });
+
+          case "SERVER_CRASHED":
+            if (state.server === "down") return reject(state, action.type, "the server is already down");
+            return record(state, action.type, "The server disappeared unexpectedly. Connected pages become disconnected and instruct the user to relaunch.", {
+              phase: "failed", server: "down", work: "idle", model: "not loaded", url: "—", exitReason: "unexpected server loss",
+            });
+
+          default:
+            return reject(state, action.type, "unknown action");
+        }
+      }
+
+      return Object.freeze({ initial, transition });
+    })();
+  </script>
+
+  <script>
+    // Throwaway presentation shell around the portable state machine above.
+    const actionLabels = {
+      LAUNCH: "Launch / relaunch",
+      SERVER_READY: "Server becomes ready",
+      STARTUP_FAILED: "Startup fails",
+      AUTO_OPENED: "Browser opens",
+      AUTO_OPEN_FAILED: "Browser open fails",
+      CLIENT_CONNECTED: "Connect another tab",
+      CLIENT_CLOSED: "Close one tab",
+      GRACE_EXPIRED: "Grace period expires",
+      MODEL_LOADING: "Start model loading",
+      MODEL_READY: "Model becomes ready",
+      WORK_STARTED: "Start transcription",
+      WORK_FINISHED: "Finish transcription",
+      REQUEST_QUIT: "Choose Quit local app",
+      CANCEL_QUIT: "Keep working",
+      CONFIRM_QUIT: "Cancel work and quit",
+      TERMINAL_STOP: "Press Ctrl+C / SIGTERM",
+      SHUTDOWN_COMPLETE: "Cleanup completes",
+      SERVER_CRASHED: "Server crashes",
+    };
+
+    const scenarios = [
+      {
+        title: "Normal launch and explicit exit",
+        copy: "Watch readiness belong to the local UI/API, not the model. The app opens before the model is ready and exits only through an explicit action.",
+        actions: ["LAUNCH", "SERVER_READY", "AUTO_OPENED", "MODEL_LOADING", "MODEL_READY", "REQUEST_QUIT", "SHUTDOWN_COMPLETE"],
+      },
+      {
+        title: "Close the browser during work",
+        copy: "The awkward case: a transcription is active when the last tab closes. Under the recommended contract, work and the server survive; relaunch reconnects to the same app session.",
+        actions: ["LAUNCH", "SERVER_READY", "AUTO_OPENED", "MODEL_LOADING", "MODEL_READY", "WORK_STARTED", "CLIENT_CLOSED", "LAUNCH", "CLIENT_CONNECTED", "WORK_FINISHED"],
+      },
+      {
+        title: "Default browser does not open",
+        copy: "A source user may have no runnable default browser. The recommended path keeps the loopback server alive, prints the URL, and permits a manual connection instead of hanging silently.",
+        actions: ["LAUNCH", "SERVER_READY", "AUTO_OPEN_FAILED", "CLIENT_CONNECTED", "TERMINAL_STOP", "SHUTDOWN_COMPLETE"],
+      },
+      {
+        title: "Quit while transcription is active",
+        copy: "Explicit Quit is not permission to silently discard work. The UI asks; declining returns to work, while confirming cancels the job and performs cleanup.",
+        actions: ["LAUNCH", "SERVER_READY", "AUTO_OPENED", "MODEL_LOADING", "MODEL_READY", "WORK_STARTED", "REQUEST_QUIT", "CANCEL_QUIT", "REQUEST_QUIT", "CONFIRM_QUIT", "SHUTDOWN_COMPLETE"],
+      },
+      {
+        title: "Unexpected server loss",
+        copy: "A loaded browser page cannot keep the Python process alive. When the server disappears, the page becomes disconnected and the next launch starts a new app session.",
+        actions: ["LAUNCH", "SERVER_READY", "AUTO_OPENED", "SERVER_CRASHED", "LAUNCH", "SERVER_READY", "AUTO_OPENED"],
+      },
+    ];
+
+    const actionOrder = Object.keys(actionLabels);
+    const stateGrid = document.querySelector("#state-grid");
+    const phasePill = document.querySelector("#phase-pill");
+    const lastChange = document.querySelector("#last-change");
+    const historyEl = document.querySelector("#history");
+    const actionsEl = document.querySelector("#free-actions");
+    let state = Lifecycle.initial();
+    let scenarioIndex = 0;
+    let stepIndex = 0;
+
+    function titleCase(value) {
+      return String(value).replaceAll("-", " ").replace(/\b\w/g, c => c.toUpperCase());
+    }
+
+    function toneFor(phase) {
+      if (["failed"].includes(phase)) return "danger";
+      if (["starting", "waiting-for-browser", "grace-period", "confirming-exit", "stopping"].includes(phase)) return "warn";
+      return "normal";
+    }
+
+    function render() {
+      phasePill.textContent = titleCase(state.phase);
+      phasePill.dataset.tone = toneFor(state.phase);
+      const data = [
+        ["Local process", ["stopped", "failed"].includes(state.phase) ? "Not running" : "Running"],
+        ["Loopback server", titleCase(state.server)],
+        ["Browser clients", String(state.browserClients)],
+        ["Model", titleCase(state.model)],
+        ["Transcription", titleCase(state.work)],
+        ["App session", state.generation ? `Generation ${state.generation}` : "None yet"],
+        ["Local URL", state.url],
+        ["Exit reason", state.exitReason],
+      ];
+      stateGrid.innerHTML = data.map(([label, value]) => `<div class="datum"><dt>${label}</dt><dd>${value}</dd></div>`).join("");
+      lastChange.textContent = state.lastChange;
+      lastChange.classList.toggle("invalid", state.invalid);
+      historyEl.innerHTML = state.history.length
+        ? state.history.map((entry, i) => `<li><span class="log-num">${i + 1}</span><span>${entry}</span></li>`).join("")
+        : '<li><span class="log-num">—</span><span>No transitions yet.</span></li>';
+      historyEl.scrollTop = historyEl.scrollHeight;
+      renderScenario();
+    }
+
+    function dispatch(type) {
+      state = Lifecycle.transition(state, { type });
+      render();
+    }
+
+    actionOrder.forEach(type => {
+      const button = document.createElement("button");
+      button.className = `btn${type === "LAUNCH" ? " primary" : ""}${["CONFIRM_QUIT", "SERVER_CRASHED"].includes(type) ? " danger" : ""}`;
+      button.textContent = actionLabels[type];
+      button.addEventListener("click", () => dispatch(type));
+      actionsEl.appendChild(button);
+    });
+
+    function resetForScenario() {
+      const policy = {
+        lastTab: document.querySelector("#last-tab-policy").value,
+        relaunch: document.querySelector("#relaunch-policy").value,
+        openFailure: document.querySelector("#open-failure-policy").value,
+      };
+      state = Lifecycle.initial(policy);
+      stepIndex = 0;
+      render();
+    }
+
+    function renderScenario() {
+      const scenario = scenarios[scenarioIndex];
+      document.querySelector("#scenario-title").textContent = scenario.title;
+      document.querySelector("#scenario-copy").textContent = scenario.copy;
+      document.querySelector("#scenario-steps").innerHTML = scenario.actions.map((type, i) => `
+        <div class="step ${i === stepIndex ? "current" : ""} ${i < stepIndex ? "done" : ""}">
+          <span class="step-number">${i + 1}</span>
+          <span>${actionLabels[type]}</span>
+          <button data-step="${i}" ${i !== stepIndex ? "disabled" : ""}>Run step</button>
+        </div>
+      `).join("");
+      document.querySelectorAll("[data-step]").forEach(button => {
+        button.addEventListener("click", () => {
+          const i = Number(button.dataset.step);
+          if (i !== stepIndex) return;
+          dispatch(scenario.actions[i]);
+          stepIndex += 1;
+          render();
+        });
+      });
+    }
+
+    const tabs = document.querySelector("#scenario-tabs");
+    scenarios.forEach((scenario, i) => {
+      const button = document.createElement("button");
+      button.className = `tab${i === 0 ? " active" : ""}`;
+      button.textContent = scenario.title;
+      button.addEventListener("click", () => {
+        scenarioIndex = i;
+        tabs.querySelectorAll(".tab").forEach((tab, tabIndex) => tab.classList.toggle("active", tabIndex === i));
+        resetForScenario();
+      });
+      tabs.appendChild(button);
+    });
+
+    ["last-tab-policy", "relaunch-policy", "open-failure-policy"].forEach(id => {
+      document.querySelector(`#${id}`).addEventListener("change", resetForScenario);
+    });
+
+    resetForScenario();
+  </script>
+</body>
+</html>
