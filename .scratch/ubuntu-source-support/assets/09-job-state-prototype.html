@@ -1,0 +1,407 @@
+<title>Reconnectable job state</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Space+Grotesk:wght@500;700&family=Space+Mono&display=swap">
+<style>
+:root{
+  --paper:#F8F7F4; --panel:#FFFFFF; --panel-2:#FCFBF9;
+  --ink:#17171A; --ink-2:#3A3A40; --muted:#707078; --faint:#A0A099;
+  --line:#E7E5E0; --line-strong:#D8D5CE;
+  --accent:#0E8E7A; --accent-strong:#0B7565; --accent-soft:#E3F4F0; --accent-tint:#F0F8F6;
+  --live:#E5484D; --live-soft:#FCEBEC; --ok:#1C8C5A; --ok-soft:#E6F3EC;
+  --warn-bg:#FBF4E6; --warn-fg:#8A6312; --warn-line:#ECDCB6;
+  --r-card:12px; --r-btn:8px; --r-pill:999px;
+  --shadow-sm:0 1px 2px rgba(20,20,30,.05);
+  --shadow:0 1px 2px rgba(20,20,30,.04),0 6px 18px rgba(20,20,30,.06);
+  --font-ui:"Noto Sans TC","Microsoft JhengHei",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-disp:"Space Grotesk","Noto Sans TC",system-ui,sans-serif;
+  --font-mono:"Space Mono","JetBrains Mono","Consolas",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#15161A; --panel:#1E2026; --panel-2:#191A1F;
+    --ink:#ECEDEF; --ink-2:#C6C7CC; --muted:#9597A0; --faint:#6A6C75;
+    --line:#2C2E36; --line-strong:#3A3D47;
+    --accent:#18A892; --accent-strong:#13917D; --accent-soft:#14322D; --accent-tint:#122220;
+    --live:#FF5C61; --live-soft:#3A1F21; --ok:#2BB070; --ok-soft:#15321F;
+    --warn-bg:#2E2716; --warn-fg:#E6B968; --warn-line:#4A3E20;
+    --shadow-sm:0 1px 2px rgba(0,0,0,.35);
+    --shadow:0 1px 2px rgba(0,0,0,.30),0 6px 18px rgba(0,0,0,.40);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#15161A; --panel:#1E2026; --panel-2:#191A1F;
+  --ink:#ECEDEF; --ink-2:#C6C7CC; --muted:#9597A0; --faint:#6A6C75;
+  --line:#2C2E36; --line-strong:#3A3D47;
+  --accent:#18A892; --accent-strong:#13917D; --accent-soft:#14322D; --accent-tint:#122220;
+  --live:#FF5C61; --live-soft:#3A1F21; --ok:#2BB070; --ok-soft:#15321F;
+  --warn-bg:#2E2716; --warn-fg:#E6B968; --warn-line:#4A3E20;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.35);
+  --shadow:0 1px 2px rgba(0,0,0,.30),0 6px 18px rgba(0,0,0,.40);
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:var(--font-ui);color:var(--ink);background:var(--paper);font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased;padding:0 0 40px}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+.shell{max-width:1160px;margin:0 auto;padding:28px 20px}
+.eyebrow{display:inline-block;font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--warn-fg);background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:var(--r-pill);padding:2px 10px;margin-bottom:10px}
+h1{font-family:var(--font-disp);font-size:26px;margin:0 0 4px;text-wrap:balance}
+.lede{color:var(--muted);max-width:74ch;margin:0 0 10px}
+.question{font-family:var(--font-mono);font-size:12.5px;color:var(--ink-2);background:var(--panel-2);border:1px dashed var(--line-strong);border-radius:8px;padding:10px 12px;max-width:82ch;margin-bottom:16px}
+.rules{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:18px}
+.rule{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+.rule b{display:block;color:var(--accent-strong);font-size:12.5px;margin-bottom:2px}
+.rule span{color:var(--ink-2)}
+h2{font-family:var(--font-disp);font-size:16px;margin:0 0 8px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-card);box-shadow:var(--shadow-sm);padding:14px 16px;margin-bottom:14px}
+.layout{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+@media (max-width:900px){.layout{grid-template-columns:1fr}}
+.hint{font-size:12.5px;color:var(--muted);margin:6px 0 0}
+.actions{display:flex;flex-wrap:wrap;gap:8px}
+.act{border:1px solid var(--line-strong);background:var(--panel-2);color:var(--ink-2);border-radius:var(--r-btn);padding:6px 11px;font-size:13px;font-family:var(--font-ui);cursor:pointer}
+.act:hover{border-color:var(--accent);color:var(--accent-strong)}
+.act.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.act.danger{color:var(--live);border-color:var(--live)}
+.jobcard{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--panel-2)}
+.jobcard .top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.jobcard .nm{font-weight:500}
+.jobcard .id{font-family:var(--font-mono);font-size:11px;color:var(--faint)}
+.pill{display:inline-flex;align-items:center;gap:5px;border-radius:var(--r-pill);padding:2px 10px;font-size:11.5px;border:1px solid var(--line)}
+.pill.running{background:var(--accent-soft);color:var(--accent-strong);border-color:var(--accent-soft)}
+.pill.queued{background:var(--panel);color:var(--muted)}
+.pill.capturing{background:var(--live-soft);color:var(--live);border-color:var(--live-soft)}
+.pill.completed{background:var(--ok-soft);color:var(--ok);border-color:var(--ok-soft)}
+.pill.failed{background:var(--live-soft);color:var(--live);border-color:var(--live-soft)}
+.pill.cancelled{background:var(--panel);color:var(--faint)}
+.pill.detached{background:var(--warn-bg);color:var(--warn-fg);border-color:var(--warn-line)}
+.bar{height:5px;border-radius:3px;background:var(--line);margin-top:7px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent)}
+.items{margin:7px 0 0;padding:0;list-style:none;font-size:12.5px;color:var(--ink-2)}
+.items li{display:flex;gap:8px;align-items:center;padding:2px 0}
+.seg{font-size:12.5px;color:var(--ink-2);margin-top:7px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 9px}
+.seg .edited{color:var(--accent-strong);font-family:var(--font-mono);font-size:10.5px;margin-left:6px}
+.err{font-size:12.5px;color:var(--live);margin-top:6px}
+.note{font-size:12.5px;color:var(--warn-fg);margin-top:6px}
+.savedto{font-size:11.5px;color:var(--ok);font-family:var(--font-mono);margin-top:4px}
+.disk{display:flex;flex-wrap:wrap;gap:6px}
+.file{font-family:var(--font-mono);font-size:11.5px;background:var(--ok-soft);color:var(--ok);border-radius:6px;padding:3px 9px}
+.clients{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:640px){.clients{grid-template-columns:1fr}}
+.client{border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-height:120px}
+.client.off{background:var(--panel-2);color:var(--faint);border-style:dashed}
+.client h3{font-family:var(--font-mono);font-size:12px;letter-spacing:.05em;text-transform:uppercase;margin:0 0 6px;color:var(--muted);display:flex;align-items:center;gap:8px}
+.dotc{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+.off .dotc{background:var(--faint)}
+.cjob{font-size:12.5px;color:var(--ink-2);border-top:1px solid var(--line);padding:5px 0}
+.cjob:first-of-type{border-top:none}
+.draft{font-size:12px;color:var(--warn-fg);background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:6px;padding:4px 8px;margin-top:6px}
+.policies{display:grid;gap:9px}
+.policy{border:1px solid var(--line);border-radius:9px;padding:9px 11px}
+.policy .q{font-size:13px;font-weight:500;margin-bottom:5px}
+.policy label{display:flex;gap:7px;font-size:12.5px;color:var(--ink-2);align-items:baseline;padding:2px 0;cursor:pointer}
+.policy input{accent-color:var(--accent)}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.tab{border:1px solid var(--line-strong);background:var(--panel-2);border-radius:var(--r-pill);padding:4px 12px;font-size:12.5px;cursor:pointer;color:var(--ink-2)}
+.tab.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.scenario-copy{font-size:13px;color:var(--ink-2);margin:0 0 8px;max-width:70ch}
+.log{margin:0;padding-left:0;list-style:none;font-size:12.5px;max-height:280px;overflow-y:auto}
+.log li{padding:4px 0;border-bottom:1px solid var(--line);color:var(--ink-2)}
+.log li.bad{color:var(--live)}
+.log li.sys{color:var(--warn-fg)}
+.log .t{font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-right:7px}
+.footer-note{font-size:12.5px;color:var(--muted);max-width:88ch;margin-top:18px}
+</style>
+
+<main class="shell">
+  <span class="eyebrow">Throwaway logic prototype</span>
+  <h1>Reconnectable transcription job state</h1>
+  <p class="lede">Drive the server-owned job registry through starts, progress, failures, disconnects, and a process restart, and watch what each browser client can recover. Changes no production code, stores nothing.</p>
+  <p class="question">Which server-owned state machine and data contract should represent single-file, batch, and recording transcription jobs so every trusted browser client can recover progress, editable results, errors, and session-lifetime history — while live microphone capture ends with its capturing client and only durable files survive process restart?</p>
+
+  <div class="rules" aria-label="Model under test">
+    <div class="rule"><b>Job registry</b><span>The local app session owns an ordered, session-lifetime list of jobs. Clients only render snapshots of it.</span></div>
+    <div class="rule"><b>States</b><span>queued → running → completed | failed | cancelled. Recording adds capturing, bound to its capture client.</span></div>
+    <div class="rule"><b>One at a time</b><span>One job runs at a time; later starts queue behind it, whichever client submitted them.</span></div>
+    <div class="rule"><b>Recovery</b><span>A reconnecting client gets the full registry: progress, editable results, errors, history — nothing is tab-local.</span></div>
+    <div class="rule"><b>Durability</b><span>Process restart wipes the registry. Only saved output files (disk) survive.</span></div>
+  </div>
+
+  <div class="layout">
+    <div class="stack">
+      <section class="panel">
+        <h2>Server truth — job registry</h2>
+        <div id="registry"></div>
+        <div style="margin-top:8px"><span style="font-size:12px;color:var(--muted)">Durable disk:</span> <span class="disk" id="disk"></span></div>
+      </section>
+
+      <section class="panel">
+        <h2>Free play</h2>
+        <div class="actions" id="free-actions"></div>
+        <p class="hint">All actions stay visible. Illegal moves are rejected and explained in the history — that is usually where a contract feels wrong.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Policy choices under debate</h2>
+        <div class="policies">
+          <div class="policy">
+            <div class="q">1 · What is a batch?</div>
+            <label><input type="radio" name="p-batch" value="one-job" checked> One job containing items — one history entry, one cancel, per-item states inside <b>(recommended)</b></label>
+            <label><input type="radio" name="p-batch" value="group"> A group of sibling jobs — each item is its own registry entry sharing a group id</label>
+          </div>
+          <div class="policy">
+            <div class="q">2 · Where do result edits live before saving?</div>
+            <label><input type="radio" name="p-edits" value="server" checked> Server-owned — every client sees edits immediately; edits survive tab close <b>(recommended)</b></label>
+            <label><input type="radio" name="p-edits" value="client"> Client-local draft — private until saved; lost when the tab closes</label>
+          </div>
+          <div class="policy">
+            <div class="q">3 · Capture client closes mid-recording — the job becomes…</div>
+            <label><input type="radio" name="p-rec" value="partial" checked> completed, with an "ended early" note and retained segments <b>(recommended)</b></label>
+            <label><input type="radio" name="p-rec" value="detached"> a distinct detached state, so reconnecting clients see it was cut, not finished</label>
+          </div>
+        </div>
+        <p class="hint">Changing a policy resets the demo so comparisons start from the same state.</p>
+      </section>
+    </div>
+
+    <div class="stack">
+      <section class="panel">
+        <h2>Browser clients</h2>
+        <div class="clients">
+          <div class="client" id="client-A"></div>
+          <div class="client" id="client-B"></div>
+        </div>
+        <p class="hint">Tabs are disposable. A disconnected client holds nothing; reconnecting re-renders purely from the registry snapshot.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Guided walkthroughs</h2>
+        <div class="tabs" id="scenario-tabs"></div>
+        <p class="scenario-copy" id="scenario-copy"></p>
+        <div class="actions"><button class="act primary" id="scenario-run">Reset &amp; play scenario</button></div>
+      </section>
+
+      <section class="panel">
+        <h2>Registry history</h2>
+        <ol class="log" id="history"></ol>
+      </section>
+    </div>
+  </div>
+
+  <p class="footer-note">Terminology under test: the <strong>job registry</strong> is the app session's canonical, session-lifetime record of transcription work; a <strong>capture client</strong> is the one browser client whose microphone feeds a recording job; a <strong>durable output</strong> is a file written to disk on save — the only thing a process restart cannot take away.</p>
+</main>
+
+<script>
+(function(){
+  "use strict";
+  var S, seq;
+  function policy(){
+    function val(n){var el=document.querySelector('input[name="'+n+'"]:checked');return el?el.value:"";}
+    return {batch:val("p-batch"), edits:val("p-edits"), rec:val("p-rec")};
+  }
+  function reset(msg){
+    S={jobs:[],nextId:1,disk:[],history:[],clients:{A:{on:true,draft:null},B:{on:false,draft:null}}};
+    seq=0;
+    log("sys", msg||"Reset to a fresh app session. Client A connected, Client B closed.");
+    render();
+  }
+  function log(kind,msg){S.history.unshift({n:++seq,kind:kind,msg:msg});}
+  function reject(msg){log("bad","rejected — "+msg);render();}
+  function runningJob(){return S.jobs.find(function(j){return j.state==="running"||j.state==="capturing";});}
+  function promoteQueue(){
+    if(runningJob())return;
+    var next=S.jobs.find(function(j){return j.state==="queued";});
+    if(next){next.state="running";log("ok","#"+next.id+" "+next.label+" starts running (from queue)");}
+  }
+  function newJob(kind,label,total,extra){
+    var j={id:S.nextId++,kind:kind,label:label,state:"queued",done:0,total:total,segments:[],error:null,note:null,savedTo:null};
+    for(var k in (extra||{}))j[k]=extra[k];
+    S.jobs.push(j);
+    return j;
+  }
+  function anyClientOn(){return S.clients.A.on||S.clients.B.on;}
+
+  var ACTIONS=[
+    {id:"toggleA",label:function(){return S.clients.A.on?"Close client A":"Reconnect client A";},fn:function(){toggleClient("A");}},
+    {id:"toggleB",label:function(){return S.clients.B.on?"Close client B":"Reconnect client B";},fn:function(){toggleClient("B");}},
+    {id:"single",label:function(){return "Start single-file job";},fn:function(){
+      if(!anyClientOn())return reject("no connected client to submit a job");
+      var j=newJob("single","單檔 interview.mp3",4);
+      log("ok","#"+j.id+" single-file job queued");promoteQueue();render();}},
+    {id:"batch",label:function(){return "Start batch (3 files)";},fn:function(){
+      if(!anyClientOn())return reject("no connected client to submit a batch");
+      if(policy().batch==="one-job"){
+        var j=newJob("batch","批次 3 檔",6,{items:[{name:"ep1.mp4",state:"queued"},{name:"ep2.mp4",state:"queued"},{name:"ep3.mp4",state:"queued"}]});
+        log("ok","#"+j.id+" batch job queued (one job, 3 items)");
+      }else{
+        var g="g"+S.nextId;
+        ["ep1.mp4","ep2.mp4","ep3.mp4"].forEach(function(n){newJob("single","批次項 "+n,2,{group:g});});
+        log("ok","batch queued as 3 sibling jobs (group "+g+")");
+      }
+      promoteQueue();render();}},
+    {id:"rec",label:function(){return "Start recording (capture = A)";},fn:function(){
+      if(!S.clients.A.on)return reject("client A is closed — a recording job needs its capture client connected");
+      if(runningJob())return reject("another job is running; recording cannot share the model — stop or finish it first");
+      var j=newJob("recording","錄製 會議",99);j.state="capturing";j.capture="A";
+      log("ok","#"+j.id+" recording starts capturing (capture client A)");render();}},
+    {id:"stopRec",label:function(){return "Stop recording (user action)";},fn:function(){
+      var j=S.jobs.find(function(x){return x.state==="capturing";});
+      if(!j)return reject("no recording is capturing");
+      j.state="completed";j.total=j.done;j.note="stopped by user · "+j.segments.length+" segments";
+      log("ok","#"+j.id+" recording stopped; result retained");promoteQueue();render();}},
+    {id:"tick",label:function(){return "Advance progress (tick)";},fn:function(){
+      var j=runningJob();
+      if(!j)return reject("nothing is running or capturing");
+      j.done++;j.segments.push({text:"segment "+j.done+" 文字…",edited:false});
+      if(j.items){
+        var per=2, idx=Math.min(Math.floor((j.done-1)/per),j.items.length-1);
+        j.items.forEach(function(it,i){if(it.state!=="failed")it.state=i<idx?"completed":(i===idx?"running":"queued");});
+        if(j.done>=j.total){j.items.forEach(function(it){if(it.state!=="failed")it.state="completed";});}
+      }
+      if(j.state!=="capturing"&&j.done>=j.total){
+        j.state="completed";log("ok","#"+j.id+" completed ("+j.segments.length+" segments)");promoteQueue();
+      }else{
+        log("ok","#"+j.id+" progress "+j.done+(j.state==="capturing"?" segments captured":" / "+j.total));
+      }
+      render();}},
+    {id:"fail",label:function(){return "Current work fails";},fn:function(){
+      var j=runningJob();
+      if(!j)return reject("nothing is running to fail");
+      if(j.items){
+        var it=j.items.find(function(x){return x.state==="running";})||j.items.find(function(x){return x.state==="queued";});
+        if(it){it.state="failed";it.error="無法解碼（unsupported codec）";log("bad","#"+j.id+" item "+it.name+" failed — batch continues with the rest");}
+        render();return;
+      }
+      j.state="failed";j.error="模型推理錯誤 — see log; partial result retained ("+j.segments.length+" segments)";
+      log("bad","#"+j.id+" failed; error and partial result stay in the registry");promoteQueue();render();}},
+    {id:"cancel",label:function(){return "Cancel current job";},fn:function(){
+      var j=runningJob()||S.jobs.slice().reverse().find(function(x){return x.state==="queued";});
+      if(!j)return reject("nothing running or queued to cancel");
+      j.state="cancelled";j.note="cancelled · partial result retained ("+j.segments.length+" segments)";
+      if(j.items)j.items.forEach(function(it){if(it.state==="queued"||it.state==="running")it.state="cancelled";});
+      log("ok","#"+j.id+" cancelled");promoteQueue();render();}},
+    {id:"edit",label:function(){return "Edit a result segment (client B)";},fn:function(){
+      if(!S.clients.B.on)return reject("client B is closed — reconnect it first");
+      var j=S.jobs.slice().reverse().find(function(x){return x.segments.length>0;});
+      if(!j)return reject("no job has result segments yet");
+      if(policy().edits==="server"){
+        j.segments[0].text="（B 修正）"+j.segments[0].text.replace(/^（B 修正）/,"");j.segments[0].edited=true;
+        log("ok","#"+j.id+" segment 1 edited — server-owned, visible to every client, survives B closing");
+      }else{
+        S.clients.B.draft={job:j.id,text:"（B 草稿）segment 1 修正"};
+        log("ok","#"+j.id+" edit held as client-B local draft — invisible to A, lost if B closes");
+      }
+      render();}},
+    {id:"save",label:function(){return "Save result to file";},fn:function(){
+      var j=S.jobs.slice().reverse().find(function(x){return x.segments.length>0;});
+      if(!j)return reject("no result to save");
+      if(policy().edits==="client"&&S.clients.B.draft&&S.clients.B.draft.job===j.id){
+        j.segments[0].text=S.clients.B.draft.text;j.segments[0].edited=true;S.clients.B.draft=null;
+        log("ok","client draft applied on save");
+      }
+      j.savedTo="output/"+j.id+"-"+(j.kind)+".srt";
+      if(S.disk.indexOf(j.savedTo)<0)S.disk.push(j.savedTo);
+      log("ok","#"+j.id+" saved → "+j.savedTo+" (durable)");render();}},
+    {id:"restart",label:function(){return "Restart local app process";},fn:function(){
+      var files=S.disk.slice();
+      var hist=S.history;
+      S={jobs:[],nextId:1,disk:files,history:hist,clients:{A:{on:S.clients.A.on,draft:null},B:{on:S.clients.B.on,draft:null}}};
+      log("sys","process restarted — registry and session history gone; "+files.length+" durable file(s) survive; connected clients recover an empty registry");
+      render();}}
+  ];
+
+  function toggleClient(c){
+    var cl=S.clients[c];
+    if(cl.on){
+      var rec=S.jobs.find(function(x){return x.state==="capturing"&&x.capture===c;});
+      cl.on=false;cl.draft=null;
+      if(rec){
+        if(policy().rec==="partial"){rec.state="completed";rec.total=rec.done;rec.note="ended early — capture client closed · "+rec.segments.length+" segments retained";}
+        else{rec.state="detached";rec.note="capture cut — client closed · "+rec.segments.length+" segments retained";}
+        log("sys","client "+c+" closed — recording #"+rec.id+" capture stops ("+policy().rec+"), transcribed segments retained");
+        promoteQueue();
+      }else{
+        log("sys","client "+c+" closed — registry and jobs unaffected");
+      }
+    }else{
+      cl.on=true;
+      log("sys","client "+c+" reconnected — recovers the full registry snapshot");
+    }
+    render();
+  }
+
+  var SCENARIOS=[
+    {name:"Reconnect mid-run",copy:"A starts a single-file job and closes its tab mid-run. B connects later and recovers live progress, then the finished, editable result. No work is tab-local.",
+     steps:["single","tick","toggleA","toggleB","tick","tick","tick","edit","save"]},
+    {name:"Batch with a failing item",copy:"A batch keeps going when one item fails; the per-item error stays recoverable in the registry after the batch finishes.",
+     steps:["batch","tick","fail","tick","tick","tick","tick","tick"]},
+    {name:"Capture client dies",copy:"Recording is the exception: capture ends with its client (per policy 3), but every already-transcribed segment stays recoverable by the next client.",
+     steps:["rec","tick","tick","tick","toggleA","toggleB"]},
+    {name:"Process restart",copy:"Save one result, then restart the process: the registry and history are gone by design; only the saved file survives on disk.",
+     steps:["single","tick","tick","tick","tick","save","restart"]}
+  ];
+  var curScenario=0;
+
+  function render(){
+    var reg=document.getElementById("registry");
+    if(!S.jobs.length){reg.innerHTML='<div class="hint">Registry empty — session-lifetime history starts when the first job is submitted.</div>';}
+    else{
+      reg.innerHTML=S.jobs.map(function(j){
+        var pct=j.state==="capturing"?100:Math.min(100,Math.round(100*j.done/j.total));
+        var h='<div class="jobcard"><div class="top"><span class="id">#'+j.id+(j.group?" · "+j.group:"")+'</span><span class="nm">'+j.label+'</span><span class="pill '+j.state+'">'+j.state+'</span>';
+        if(j.state==="running"||j.state==="capturing")h+='<span class="id">'+(j.state==="capturing"?j.done+" segments":j.done+"/"+j.total)+'</span>';
+        h+='</div>';
+        if(j.state==="running")h+='<div class="bar"><i style="width:'+pct+'%"></i></div>';
+        if(j.items)h+='<ul class="items">'+j.items.map(function(it){return '<li><span class="pill '+it.state+'">'+it.state+'</span>'+it.name+(it.error?' <span class="err" style="margin:0">· '+it.error+'</span>':'')+'</li>';}).join("")+'</ul>';
+        if(j.segments.length)h+='<div class="seg">'+j.segments.length+' segment(s) · “'+j.segments[0].text+'”'+(j.segments[0].edited?'<span class="edited">edited</span>':'')+'</div>';
+        if(j.error)h+='<div class="err">'+j.error+'</div>';
+        if(j.note)h+='<div class="note">'+j.note+'</div>';
+        if(j.savedTo)h+='<div class="savedto">→ '+j.savedTo+'</div>';
+        return h+'</div>';
+      }).join("");
+    }
+    document.getElementById("disk").innerHTML=S.disk.length?S.disk.map(function(f){return '<span class="file">'+f+'</span>';}).join(""):'<span style="font-size:12px;color:var(--faint)">（empty）</span>';
+    ["A","B"].forEach(function(c){
+      var el=document.getElementById("client-"+c),cl=S.clients[c];
+      el.className="client"+(cl.on?"":" off");
+      var h='<h3><span class="dotc"></span>Client '+c+(cl.on?" · connected":" · closed")+'</h3>';
+      if(!cl.on){h+='<div style="font-size:12.5px">No tab, no state. Everything it showed lives on in the registry'+(c==="A"?" — except live capture, which needs this client":"")+'.</div>';}
+      else if(!S.jobs.length){h+='<div class="cjob">Empty workspace — registry has no jobs.</div>';}
+      else{
+        h+=S.jobs.map(function(j){
+          return '<div class="cjob">#'+j.id+' '+j.label+' — <b>'+j.state+'</b>'+(j.segments.length?' · '+j.segments.length+' seg':'')+(j.error||j.items&&j.items.some(function(i){return i.error;})?' · <span style="color:var(--live)">error shown</span>':'')+'</div>';
+        }).join("");
+        if(cl.draft)h+='<div class="draft">unsaved local draft on #'+cl.draft.job+' — only this tab sees it</div>';
+      }
+      el.innerHTML=h;
+    });
+    var fa=document.getElementById("free-actions");
+    fa.innerHTML="";
+    ACTIONS.forEach(function(a){
+      var b=document.createElement("button");b.className="act"+(a.id==="restart"?" danger":"");b.textContent=a.label();
+      b.addEventListener("click",a.fn);fa.appendChild(b);
+    });
+    document.getElementById("history").innerHTML=S.history.map(function(e){
+      return '<li class="'+(e.kind==="bad"?"bad":e.kind==="sys"?"sys":"")+'"><span class="t">'+e.n+'</span>'+e.msg+'</li>';
+    }).join("");
+    var tabs=document.getElementById("scenario-tabs");
+    tabs.innerHTML="";
+    SCENARIOS.forEach(function(s,i){
+      var t=document.createElement("button");t.className="tab"+(i===curScenario?" on":"");t.textContent=s.name;
+      t.addEventListener("click",function(){curScenario=i;render();});tabs.appendChild(t);
+    });
+    document.getElementById("scenario-copy").textContent=SCENARIOS[curScenario].copy;
+  }
+
+  document.getElementById("scenario-run").addEventListener("click",function(){
+    reset("Scenario: "+SCENARIOS[curScenario].name);
+    var steps=SCENARIOS[curScenario].steps.slice(),i=0;
+    (function next(){
+      if(i>=steps.length)return;
+      var a=ACTIONS.find(function(x){return x.id===steps[i];});i++;
+      if(a)a.fn();
+      setTimeout(next,450);
+    })();
+  });
+  Array.prototype.slice.call(document.querySelectorAll('.policy input')).forEach(function(r){
+    r.addEventListener("change",function(){reset("Policy changed — fresh session for a fair comparison.");});
+  });
+  reset();
+})();
+</script>
