@@ -2,6 +2,7 @@
 
 Type: grilling
 Status: open
+Assignee: claude (session e1c183a8)
 Blocked by: 02
 
 ## Question
