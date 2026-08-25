@@ -1,8 +1,8 @@
 # Define the versioned cross-platform settings schema
 
 Type: grilling
-Status: open
-Assignee: claude (session 9d407362)
+Status: claimed
+Assignee: claude (session c3d36e74) — reclaimed from stale session 9d407362
 Blocked by: 03
 
 ## Question
