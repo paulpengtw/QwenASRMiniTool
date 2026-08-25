@@ -26,10 +26,11 @@ An implementation-ready decision map for Ubuntu source support: Ubuntu 24.04 x86
 - [Define reconnectable transcription job state](issues/09-define-reconnectable-transcription-job-state.md): A session-lifetime, server-owned job registry (queued→running→completed/failed/cancelled, one at a time) where a batch is one job with per-item states, result edits are server-owned, and recordings end with their capture client while retaining transcribed segments; only saved files survive restart.
 - [Choose the local app session coordination protocol](issues/10-choose-local-app-session-coordination-protocol.md): An Ubuntu-only session file (url, pid identity, access key; deleted on clean exit) drives reuse via keyed health checks, identity-verified SIGTERM takeover of stale sessions, key-authorized quit, and an SSE stopping broadcast inside the 10-second exit deadline.
 - [Define cancellation boundaries](issues/11-define-cancellation-boundaries.md) — Cooperative chunk-boundary cancellation is the only in-process interruption (non-destructive: cancelled jobs keep transcribed segments; any trusted client may cancel any job); downloads keep resumable partials, model loads are atomic, endpoint requests are connection-bound, tunnel startup is 30-second-bounded, and shutdown escalates cancel events → subprocess terminate → 10-second force-exit with no thread-kill rung.
+- [Define the versioned cross-platform settings schema](issues/12-define-versioned-cross-platform-settings-schema.md) — Schema v2 keeps one portable `settings.json` beside the checkout and adds `shared`/`platforms`/`backends` namespaces beside the legacy flat keys, which stay Windows-owned and Windows-written; key meanings are append-only with unknowns preserved, in-checkout paths go relative, first-run defaults are derived rather than seeded, `ui_scale_percent` replaces the colliding `ui_scale`, writes become atomic, and unhonourable values are ignored for the session without being overwritten.
 
 ## Not yet specified
 
-- The implementation sequence and code-change boundaries cannot be fixed until the settings-schema, bootstrap, reconnectable-work, cancellation, and platform-seam decisions are resolved.
+- The implementation sequence and code-change boundaries cannot be fixed until the bootstrap and platform-seam decisions are resolved.
 - The exact automated test layers, fixtures, and CI jobs depend on which shared seams the platform design exposes.
 - Documentation structure and troubleshooting guidance depend on the final prerequisite and first-run contracts.
 
@@ -40,3 +41,4 @@ An implementation-ready decision map for Ubuntu source support: Ubuntu 24.04 x86
 - A native Ubuntu desktop window or the legacy CustomTkinter UI as the official Ubuntu experience; the browser UI is the supported surface.
 - Ubuntu releases other than 24.04, architectures other than x86-64, and Linux distributions other than Ubuntu.
 - Exact forced word alignment on Ubuntu, whether by a Linux-native or user-provided chatllm aligner executable; Ubuntu presents proportional timing honestly ([Choose Ubuntu alignment behaviour](issues/08-choose-ubuntu-alignment-behaviour.md)).
+- The separate Windows-only `settings-gpu.json` used by `app-gpu.py`; it keeps its current flat, unversioned form and is untouched by the v2 schema ([Define the versioned cross-platform settings schema](issues/12-define-versioned-cross-platform-settings-schema.md)).
