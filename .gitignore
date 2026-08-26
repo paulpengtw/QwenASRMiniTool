@@ -122,3 +122,6 @@ UI.txt
 !Readme/*.png
 !Readme/webview/*.jpg
 !Readme/webview/*.png
+
+# 專案測試套件（tests/ 下的 pytest 檔案不受上方 test_*.py 規則影響）
+!tests/test_*.py
