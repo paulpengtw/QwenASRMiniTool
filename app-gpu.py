@@ -44,6 +44,8 @@ from tkinter import filedialog, messagebox
 import numpy as np
 import customtkinter as ctk
 
+from subtitle_lines import split_to_lines as _split_to_lines, assign_ts as _assign_ts
+
 # ── 共用模組（字幕驗證編輯器）────────────────────────────────────────
 try:
     from subtitle_editor import SubtitleEditorWindow
@@ -151,94 +153,12 @@ def _detect_speech_groups(audio: np.ndarray, vad_sess) -> list[tuple[float, floa
     return result
 
 
-def _split_to_lines(text: str) -> list[str]:
-    """語意優先斷句（ForcedAligner 不可用時的 fallback）。
-
-    斷句規則（英文/中文統一）：
-    1. 所有標點（,.!?; 及中文，。？！）→ 立即切行，標點不輸出
-    2. 英文整字為最小單位，詞間保留空格
-    3. MAX_CHARS 保護：超限才強制換行
-    """
-    if not text:
-        return []
-
-    _all_punct = _ZH_CLAUSE_END | _EN_SENT_END  # 含逗號
-    lines: list[str] = []
-    buf = ""
-
-    i = 0
-    while i < len(text):
-        ch = text[i]
-
-        # ── 標點符號：切行，標點不加入輸出（隱藏）────────────────────
-        if ch in _all_punct:
-            if buf.strip():
-                lines.append(buf.strip())
-            buf = ""
-            i += 1
-            continue
-
-        # ── 英文單字：整字收集，詞前補空格（詞界）────────────────────
-        if ch.isalpha() and ord(ch) < 128:
-            j = i
-            while j < len(text) and text[j].isalpha() and ord(text[j]) < 128:
-                j += 1
-            word = text[i:j]
-            # buf 非空且未以空格結尾 → 補一個分詞空格
-            prefix = " " if buf and not buf.endswith(" ") else ""
-            if len(buf) + len(prefix) + len(word) > MAX_CHARS and buf.strip():
-                lines.append(buf.strip())
-                buf = word
-            else:
-                buf += prefix + word
-            i = j
-            continue
-
-        # ── 空格：只在 buf 有內容且未以空格結尾時記錄 ────────────────
-        if ch == " ":
-            if buf and not buf.endswith(" "):
-                buf += " "
-            i += 1
-            if len(buf.rstrip()) >= MAX_CHARS:
-                lines.append(buf.strip())
-                buf = ""
-            continue
-
-        # ── 中文/日文/數字等：逐字累積 ────────────────────────────────
-        buf += ch
-        i += 1
-        if len(buf) >= MAX_CHARS:
-            lines.append(buf.strip())
-            buf = ""
-
-    if buf.strip():
-        lines.append(buf.strip())
-    return [l for l in lines if l.strip()]
-
-
-
 def _srt_ts(s: float) -> str:
     ms = int(round(s * 1000))
     hh = ms // 3_600_000; ms %= 3_600_000
     mm = ms // 60_000;    ms %= 60_000
     ss = ms // 1_000;     ms %= 1_000
     return f"{hh:02d}:{mm:02d}:{ss:02d},{ms:03d}"
-
-
-def _assign_ts(lines: list[str], g0: float, g1: float) -> list[tuple[float, float, str]]:
-    if not lines:
-        return []
-    total = sum(len(l) for l in lines)
-    if total == 0:
-        return []
-    dur = g1 - g0; res = []; cur = g0
-    for i, line in enumerate(lines):
-        end = cur + max(MIN_SUB_SEC, dur * len(line) / total)
-        if i == len(lines) - 1:
-            end = max(end, g1)
-        res.append((cur, end, line))
-        cur = end + GAP_SEC
-    return res
 
 
 def _find_vad_model() -> Path | None:
