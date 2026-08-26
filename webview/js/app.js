@@ -246,22 +246,44 @@
     const host = $("#subs"); host.innerHTML = "";
     segments.forEach((s, i) => host.appendChild(subCard(s, i)));
   }
+  function rerenderSubtitleViews() {
+    _karaCache = null;
+    renderSubs(curSegs);
+    if (waveDur) renderSegStrip(curSegs, waveDur);
+  }
+  function refreshSubtitleActionLabels() {
+    const editLabel = T("sub.edit", "編輯此行（Shift+Enter 分行）");
+    const mergeLabel = T("sub.mergeNext", "與下一行合併");
+    $$(".sub-edit").forEach(btn => { btn.title = editLabel; btn.setAttribute("aria-label", editLabel); });
+    $$(".sub-merge").forEach(btn => { btn.title = mergeLabel; btn.setAttribute("aria-label", mergeLabel); });
+  }
   function subCard(s, idx) {
     const el = document.createElement("div");
     // spkc-N：依說話者標示左側外框色（與 chip 同色系，不污染卡片背景）
     el.className = "sub-card" + (s.speaker ? " spkc-" + (((s.speaker - 1) % 3) + 1) : "");
     el.dataset.seg = idx;
     const spk = s.speaker ? `<span class="chip spk-${((s.speaker - 1) % 3) + 1}">說話者 ${s.speaker}</span>` : "";
+    const editLabel = T("sub.edit", "編輯此行（Shift+Enter 分行）");
+    const mergeLabel = T("sub.mergeNext", "與下一行合併");
+    const mergeBtn = idx < curSegs.length - 1 ? `<button class="sub-merge" title="${escapeHtml(mergeLabel)}" aria-label="${escapeHtml(mergeLabel)}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14"/><path d="M5 10h14"/><path d="M12 13v7"/><path d="m8 17 4 4 4-4"/></svg>
+      </button>` : "";
     el.innerHTML = `<span class="tc">${fmtClock(s.start)} → ${fmtClock(s.end)}</span>
       <div class="body"><div class="spk">${spk}</div><div class="txt">${escapeHtml(s.text)}</div></div>
-      <button class="sub-edit" title="編輯此行" aria-label="編輯此行">
+      <button class="sub-edit" title="${escapeHtml(editLabel)}" aria-label="${escapeHtml(editLabel)}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-      </button>`;
+      </button>${mergeBtn}`;
     el.addEventListener("click", e => {
-      if (e.target.closest(".sub-edit") || el.classList.contains("editing")) return;
+      if (e.target.closest(".sub-edit, .sub-merge") || el.classList.contains("editing")) return;
       seekTo(s.start);
     });
     el.querySelector(".sub-edit").addEventListener("click", e => { e.stopPropagation(); beginEdit(el, idx); });
+    const merge = el.querySelector(".sub-merge");
+    if (merge) merge.addEventListener("click", e => {
+      e.stopPropagation();
+      curSegs.splice(idx, 2, SegmentOps.mergeSegments(curSegs[idx], curSegs[idx + 1]));
+      rerenderSubtitleViews();
+    });
     return el;
   }
 
@@ -281,20 +303,32 @@
       txt.removeEventListener("blur", onBlur);
       txt.contentEditable = "false";
       card.classList.remove("editing");
-      const val = (txt.textContent || "").trim();
-      if (save && val && val !== orig) {
-        curSegs[idx].text = val; txt.textContent = val;
-        curSegs[idx].words = reflowWords(curSegs[idx], val);  // 卡拉OK字級跟著修正
-        _karaCache = null;                                    // 失效快取 → 下次重繪該行
-        const blk = $(`.seg-block[data-seg="${idx}"]`);
-        if (blk) { blk.textContent = val; blk.title = val; }
+      const val = (txt.innerText || "").trim();
+      if (save && val !== orig) {
+        const pieces = SegmentOps.splitSegment(curSegs[idx], val);
+        curSegs.splice(idx, 1, ...pieces);
+        rerenderSubtitleViews();
       } else {
         txt.textContent = orig;               // 取消或清空 → 還原
       }
       txt.blur();
     }
+    function insertLineBreak() {
+      let inserted = false;
+      try { inserted = document.execCommand && document.execCommand("insertText", false, "\n"); } catch (e) {}
+      if (inserted) return;
+      const sel = window.getSelection();
+      if (!sel || !sel.rangeCount) return;
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      const node = document.createTextNode("\n");
+      range.insertNode(node);
+      range.setStartAfter(node); range.collapse(true);
+      sel.removeAllRanges(); sel.addRange(range);
+    }
     function onKey(e) {
-      if (e.key === "Enter") { e.preventDefault(); finish(true); }
+      if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); insertLineBreak(); }
+      else if (e.key === "Enter") { e.preventDefault(); finish(true); }
       else if (e.key === "Escape") { e.preventDefault(); finish(false); }
     }
     function onBlur() { finish(true); }
@@ -385,9 +419,22 @@
   }
 
   // 卡拉OK高亮單位：去空白與標點（與後端 FA words 慣例一致，標點不單獨成一拍）。
-  const _KARA_PUNCT = "，。？！；：、…—·,.!?;:";
   function karaokeUnits(text) {
-    return [...(text || "")].filter(c => c.trim() && !_KARA_PUNCT.includes(c));
+    const units = [];
+    let latin = "";
+    const flushLatin = () => {
+      if (latin) { units.push(latin); latin = ""; }
+    };
+    for (const ch of String(text || "")) {
+      if (/[A-Za-z0-9]/.test(ch)) {
+        latin += ch;
+      } else {
+        flushLatin();
+        if (ch.trim() && !/[\p{P}\p{S}]/u.test(ch)) units.push(ch);
+      }
+    }
+    flushLatin();
+    return units;
   }
   // 把某段 chars 依行時間平均內插成 words（無 FA、或編輯後字數改變時用）。
   function interpWords(seg, units) {
@@ -955,6 +1002,7 @@
     const v = e.target.value;
     API.setSettings({ uiLang: v });
     if (window.I18N) { I18N.setLang(v); refreshViewTitle(); }
+    refreshSubtitleActionLabels();
     if (_curView === "model") renderModel();   // 重繪動態文字（核心卡描述等）
   });
   // 檢查更新：開啟 GitHub Releases 頁（系統瀏覽器）
