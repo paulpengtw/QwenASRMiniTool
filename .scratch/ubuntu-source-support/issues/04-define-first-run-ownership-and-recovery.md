@@ -1,7 +1,7 @@
 # Define first-run ownership and recovery
 
 Type: grilling
-Status: open
+Status: claimed
 Blocked by: 01, 03, 12
 
 ## Question
