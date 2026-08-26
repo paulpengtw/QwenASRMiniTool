@@ -27,12 +27,13 @@ An implementation-ready decision map for Ubuntu source support: Ubuntu 24.04 x86
 - [Choose the local app session coordination protocol](issues/10-choose-local-app-session-coordination-protocol.md): An Ubuntu-only session file (url, pid identity, access key; deleted on clean exit) drives reuse via keyed health checks, identity-verified SIGTERM takeover of stale sessions, key-authorized quit, and an SSE stopping broadcast inside the 10-second exit deadline.
 - [Define cancellation boundaries](issues/11-define-cancellation-boundaries.md) — Cooperative chunk-boundary cancellation is the only in-process interruption (non-destructive: cancelled jobs keep transcribed segments; any trusted client may cancel any job); downloads keep resumable partials, model loads are atomic, endpoint requests are connection-bound, tunnel startup is 30-second-bounded, and shutdown escalates cancel events → subprocess terminate → 10-second force-exit with no thread-kill rung.
 - [Define the versioned cross-platform settings schema](issues/12-define-versioned-cross-platform-settings-schema.md) — Schema v2 keeps one portable `settings.json` beside the checkout and adds `shared`/`platforms`/`backends` namespaces beside the legacy flat keys, which stay Windows-owned and Windows-written; key meanings are append-only with unknowns preserved, in-checkout paths go relative, first-run defaults are derived rather than seeded, `ui_scale_percent` replaces the colliding `ui_scale`, writes become atomic, and unhonourable values are ignored for the session without being overwritten.
+- [Define first-run ownership and recovery](issues/04-define-first-run-ownership-and-recovery.md) — Three owners (user: apt packages and uv; uv: the Python environment via `pyproject.toml`/`uv.lock` on system Python 3.12; application: models and VAD), a tiered failure surface where only "cannot serve" is fatal and FFmpeg or a missing browser merely degrade, `.part`-then-rename downloads with bounded transient retry and offline fast-fail, downloads as reconnectable registry jobs in a lane exempt from the single-runner rule with submit-time validation, Linux-only removal of the unverified-TLS rung, and bilingual terminal messages with coded capability remedies.
 
 ## Not yet specified
 
-- The implementation sequence and code-change boundaries cannot be fixed until the bootstrap and platform-seam decisions are resolved.
+- The implementation sequence and code-change boundaries cannot be fixed until the platform-seam decisions are resolved.
 - The exact automated test layers, fixtures, and CI jobs depend on which shared seams the platform design exposes.
-- Documentation structure and troubleshooting guidance depend on the final prerequisite and first-run contracts.
+- Documentation structure and troubleshooting guidance depend on the final workflow-compatibility and support-evidence contracts.
 
 ## Out of scope
 
@@ -42,3 +43,4 @@ An implementation-ready decision map for Ubuntu source support: Ubuntu 24.04 x86
 - Ubuntu releases other than 24.04, architectures other than x86-64, and Linux distributions other than Ubuntu.
 - Exact forced word alignment on Ubuntu, whether by a Linux-native or user-provided chatllm aligner executable; Ubuntu presents proportional timing honestly ([Choose Ubuntu alignment behaviour](issues/08-choose-ubuntu-alignment-behaviour.md)).
 - The separate Windows-only `settings-gpu.json` used by `app-gpu.py`; it keeps its current flat, unversioned form and is untouched by the v2 schema ([Define the versioned cross-platform settings schema](issues/12-define-versioned-cross-platform-settings-schema.md)).
+- A uv-managed Python interpreter and the Tk 9.0 validation it would require; Ubuntu uses the system Python 3.12 and Tk 8.6 that ticket 01 probed, and revisiting the interpreter waits until the transitional Tk coupling is removed ([Define first-run ownership and recovery](issues/04-define-first-run-ownership-and-recovery.md)).
