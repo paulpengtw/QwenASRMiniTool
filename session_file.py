@@ -278,6 +278,7 @@ class Decision:
     kind: str  # "reuse" | "start_fresh" | "start_fresh_after_takeover" | "start_new_port_report_orphan"
     url: str = ""
     pid: int = 0
+    access_key: str = ""
 
     def __post_init__(self):
         valid = {"reuse", "start_fresh", "start_fresh_after_takeover",
@@ -334,7 +335,7 @@ def resolve(base_dir: Path | str, probes: Any = None) -> Decision:
 
     # 3. Health-check the live process.
     if _probe_health(url, key):
-        return Decision(kind="reuse", url=url, pid=pid)
+        return Decision(kind="reuse", url=url, pid=pid, access_key=key)
 
     # 4. Process is alive but unhealthy. Check identity.
     live_identity = _process_identity(pid)

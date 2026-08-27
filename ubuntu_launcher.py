@@ -20,6 +20,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # ---------------------------------------------------------------------------
 # Exit codes (decision 02)
@@ -87,6 +88,18 @@ def _print_startup_failure_stderr(code: str, **params) -> None:
     print(f"錯誤 [{code}]：{zh}", file=sys.stderr)
 
 
+def _with_access_key(url: str, access_key: str) -> str:
+    """Return the browser URL with the session key in its query string."""
+    if not access_key:
+        return url
+    parts = urlsplit(url)
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    if any(name == "k" for name, _value in query):
+        return url
+    query.append(("k", access_key))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
 # ---------------------------------------------------------------------------
 # Default probe implementations (real behaviour)
 # ---------------------------------------------------------------------------
@@ -123,13 +136,10 @@ class _DefaultProbes:
         import platform_seams
         return platform_seams.open_browser(url)
 
-    def install_signal_handlers(self) -> None:
-        """Install shutdown coordinator signal handlers if available (ticket 11)."""
-        try:
-            import shutdown_coordinator  # type: ignore[import]
-            shutdown_coordinator.install()
-        except ImportError:
-            pass
+    def run_server_lifecycle(self, srv, access_key: str, base_dir: Path) -> None:
+        """Install the real Linux shutdown coordinator and block until exit."""
+        from app_webview import linux_main
+        linux_main(srv, access_key=access_key, base_dir=base_dir)
 
     def exit(self, code: int) -> None:
         sys.exit(code)
@@ -175,17 +185,11 @@ def launch(probes: Any = None) -> None:
     # ---- 2. Reuse path: open existing URL, exit 0 -------------------------
     if decision.kind == "reuse":
         if not environ.get("QWEN_NO_BROWSER"):
-            probes.open_browser(decision.url)
+            probes.open_browser(_with_access_key(decision.url, getattr(decision, "access_key", "")))
         _exit(EXIT_OK)
         return
 
     # ---- 3. Fresh / takeover path -----------------------------------------
-
-    # Install shutdown coordinator signal handlers if available (ticket 11)
-    try:
-        probes.install_signal_handlers()
-    except Exception:
-        pass
 
     # Start the local HTTP server
     try:
@@ -223,6 +227,9 @@ def launch(probes: Any = None) -> None:
 
     # Write session file (advisory; failure is non-fatal)
     key = secrets.token_hex(16)
+    # The browser API and the quit route use the same per-session key.
+    srv.access_key = key
+    srv.quit_access_key = key
     started_at = datetime.datetime.utcnow().isoformat() + "Z"
     try:
         probes.write_session(base_dir, url, srv.port, os.getpid(), key, started_at)
@@ -230,18 +237,23 @@ def launch(probes: Any = None) -> None:
         pass
 
     # ---- 4. Open browser (unless headless CI) -----------------------------
+    browser_url = _with_access_key(url, key)
     no_browser = bool(environ.get("QWEN_NO_BROWSER"))
     if no_browser:
-        print(f"[QWEN_NO_BROWSER] Serving at {url} (browser suppressed)")
-        print(f"[QWEN_NO_BROWSER] 在 {url} 提供服務（已抑制瀏覽器）")
+        print(f"[QWEN_NO_BROWSER] Serving at {browser_url} (browser suppressed)")
+        print(f"[QWEN_NO_BROWSER] 在 {browser_url} 提供服務（已抑制瀏覽器）")
     else:
-        opened = probes.open_browser(url)
+        opened = probes.open_browser(browser_url)
         if not opened:
             # Decision 02: keep serving, print URL + Ctrl+C hint
-            _print_browser_failure(url)
+            _print_browser_failure(browser_url)
 
     # ---- 5. Block until Ctrl+C / shutdown signal --------------------------
-    _wait_forever()
+    lifecycle = getattr(probes, "run_server_lifecycle", None)
+    if callable(lifecycle):
+        lifecycle(srv, key, base_dir)
+    else:
+        _wait_forever()
 
     _exit(EXIT_OK)
 

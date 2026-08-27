@@ -10,6 +10,7 @@ cross-platform seams are regression-guarded without needing a real Windows host.
 from __future__ import annotations
 
 import importlib
+import subprocess
 import sys
 from pathlib import Path
 
@@ -32,6 +33,35 @@ def test_platform_seams_exports_public_functions():
                 "guard_children", "open_browser"}
     for name in expected:
         assert hasattr(platform_seams, name), f"platform_seams missing: {name}"
+
+
+def test_ubuntu_source_modules_import_under_patched_win32():
+    """The Ubuntu additions must not make Windows imports require Linux modules."""
+    code = r'''
+import importlib
+import sys
+sys.path.insert(0, "tests")
+import conftest  # installs the same GUI stubs used by the test suite
+sys.platform = "win32"
+modules = [
+    "webview_backend", "app_webview", "platform_seams", "settings_store",
+    "shutdown", "session_file", "ubuntu_launcher",
+]
+for name in modules:
+    try:
+        importlib.import_module(name)
+    except Exception as exc:
+        print(f"{name}: {type(exc).__name__}: {exc}")
+        raise
+'''
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 # ---------------------------------------------------------------------------

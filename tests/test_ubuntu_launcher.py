@@ -26,6 +26,7 @@ class _Decision:
     kind: str
     url: str = ""
     pid: int = 0
+    access_key: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +73,7 @@ class _Probes:
         self.exit_calls: list[int] = []
         self.wait_ready_calls: list[tuple] = []  # (url, timeout)
         self.stderr_lines: list[str] = []
+        self.lifecycle_calls: list[tuple] = []
 
         # Fake server object
         self._fake_srv = MagicMock()
@@ -116,6 +118,9 @@ class _Probes:
 
     def install_signal_handlers(self) -> None:
         self.signal_handlers_installed = True
+
+    def run_server_lifecycle(self, srv, access_key: str, base_dir: Path) -> None:
+        self.lifecycle_calls.append((srv, access_key, base_dir))
 
     def exit(self, code: int) -> None:
         self.exit_calls.append(code)
@@ -173,7 +178,18 @@ class TestReadinessWait:
         p = _Probes(decision=_Decision(kind="start_fresh"), ready=True)
         _run(p)
         assert p.written_sessions, "session should be written"
-        assert p.opened_urls == [p._server_url]
+        key = p.written_sessions[0]["key"]
+        assert p.opened_urls == [f"{p._server_url}?k={key}"]
+
+    def test_fresh_server_is_keyed_and_uses_coordinated_lifecycle(self):
+        """The browser receives the session key and the server gets its lifecycle owner."""
+        p = _Probes(decision=_Decision(kind="start_fresh"), ready=True)
+        _run(p)
+
+        key = p.written_sessions[0]["key"]
+        assert p._fake_srv.access_key == key
+        assert p._fake_srv.quit_access_key == key
+        assert p.lifecycle_calls == [(p._fake_srv, key, ul._default_base_dir())]
 
     def test_not_ready_exits_2(self, capsys):
         """When /health never responds, exits 2."""

@@ -29,27 +29,33 @@ ROOT = Path(__file__).resolve().parents[1]
 # ---------------------------------------------------------------------------
 
 
-def _get(port, path, host=None):
+def _get(port, path, host=None, access_key=None):
     host_hdr = host or f"127.0.0.1:{port}"
+    headers = {"Host": host_hdr}
+    if access_key:
+        headers["Authorization"] = f"Bearer {access_key}"
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}",
-        headers={"Host": host_hdr},
+        headers=headers,
     )
     with urllib.request.urlopen(req, timeout=5) as resp:
         return json.loads(resp.read().decode())
 
 
-def _post(port, path, body=None, host=None):
+def _post(port, path, body=None, host=None, access_key=None):
     host_hdr = host or f"127.0.0.1:{port}"
     data = json.dumps(body or {}).encode()
+    headers = {
+        "Host": host_hdr,
+        "Content-Type": "application/json",
+        "Content-Length": str(len(data)),
+    }
+    if access_key:
+        headers["Authorization"] = f"Bearer {access_key}"
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}",
         data=data,
-        headers={
-            "Host": host_hdr,
-            "Content-Type": "application/json",
-            "Content-Length": str(len(data)),
-        },
+        headers=headers,
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=5) as resp:
@@ -266,7 +272,8 @@ def test_sse_emits_job_events(srv):
 # ---------------------------------------------------------------------------
 
 
-def _multipart_post(port, path, fields, file_data, filename="test.wav", host=None):
+def _multipart_post(port, path, fields, file_data, filename="test.wav", host=None,
+                    access_key=None):
     """POST multipart/form-data to path.  file_data is bytes for the 'file' field."""
     import email.generator, io
     host_hdr = host or f"127.0.0.1:{port}"
@@ -291,18 +298,53 @@ def _multipart_post(port, path, fields, file_data, filename="test.wav", host=Non
     body_parts.append(b"--" + boundary + b"--\r\n")
     body = b"".join(body_parts)
 
+    headers = {
+        "Host": host_hdr,
+        "Content-Type": f"multipart/form-data; boundary={boundary.decode()}",
+        "Content-Length": str(len(body)),
+    }
+    if access_key:
+        headers["Authorization"] = f"Bearer {access_key}"
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}",
         data=body,
-        headers={
-            "Host": host_hdr,
-            "Content-Type": f"multipart/form-data; boundary={boundary.decode()}",
-            "Content-Length": str(len(body)),
-        },
+        headers=headers,
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
         return json.loads(resp.read().decode())
+
+
+def test_configured_webview_access_key_protects_api_routes(srv):
+    """Configured desktop sessions require the key on browser API calls."""
+    server, port = srv
+    old_key = getattr(server, "access_key", None)
+    server.access_key = "webview-contract-key"
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/status",
+            headers={"Host": f"127.0.0.1:{port}"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(request, timeout=5)
+        assert exc_info.value.code == 401
+        assert isinstance(_get(port, "/api/status", access_key=server.access_key), dict)
+    finally:
+        server.access_key = old_key
+
+
+def test_webview_refuses_new_work_when_shutdown_gate_is_closed(srv):
+    """The webview route honors the APP_STOPPING gate before creating a job."""
+    server, port = srv
+    server._accepting_work = False
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            _multipart_post(port, "/api/transcribe", {}, b"tiny wav", "stopping.wav")
+        assert exc_info.value.code == 503
+        body = json.loads(exc_info.value.read().decode())
+        assert body["error"]["code"] == "APP_STOPPING"
+    finally:
+        server._accepting_work = True
 
 
 def _poll_job(port, job_id, terminal_states=("completed", "failed", "cancelled"),
@@ -415,6 +457,34 @@ def test_transcribe_failing_stub_yields_failed_state(srv):
         job = _poll_job(port, job_id)
         assert job["state"] == "failed"
         assert "stub engine exploded" in (job.get("error") or "")
+    finally:
+        server.backend.transcribe = original
+
+
+def test_transcribe_coded_failure_keeps_structured_error_in_registry(srv):
+    """Coded backend refusals remain renderable after the job becomes failed."""
+    server, port = srv
+
+    class _CodedFailure(Exception):
+        code = "BACKEND_PLATFORM_UNSUPPORTED"
+        params = {"backend": "crispasr"}
+        message = "Backend is unavailable on this platform."
+
+    original = server.backend.transcribe
+
+    def _coded_failure(opts, progress_cb=None):
+        raise _CodedFailure("Backend is unavailable on this platform.")
+
+    server.backend.transcribe = _coded_failure
+    try:
+        result = _multipart_post(port, "/api/transcribe", {}, b"tiny wav", "coded.wav")
+        job = _poll_job(port, result["job_id"])
+        assert job["state"] == "failed"
+        assert job["error"] == {
+            "code": "BACKEND_PLATFORM_UNSUPPORTED",
+            "params": {"backend": "crispasr"},
+            "message": "Backend is unavailable on this platform.",
+        }
     finally:
         server.backend.transcribe = original
 

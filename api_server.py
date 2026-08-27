@@ -42,6 +42,42 @@ def _global_resp_default() -> str:
         return "srt"
 
 
+def _capability_error_payload(capability_code: str, params: dict | None = None,
+                              remedy: str = "") -> dict:
+    """Build the shared coded-error shape used by HTTP responses and jobs."""
+    normalized = dict(params or {})
+    from capability_codes import render
+    payload = {
+        "code": capability_code,
+        "params": normalized,
+        "message": render(capability_code, normalized, lang="en"),
+    }
+    if remedy:
+        payload["remedy"] = remedy
+    return payload
+
+
+def _job_error_value(error) -> str | dict:
+    """Normalize coded endpoint failures while preserving plain exceptions."""
+    source = getattr(error, "refusal", None) or error
+    if isinstance(source, dict):
+        code = source.get("code")
+        params = source.get("params") or {}
+        message = source.get("message")
+        remedy = source.get("remedy") or ""
+    else:
+        code = getattr(source, "code", None)
+        params = getattr(source, "params", {}) or {}
+        message = getattr(source, "message", None)
+        remedy = getattr(source, "remedy", "") or ""
+    if not code:
+        return str(error)
+    payload = _capability_error_payload(str(code), dict(params), str(remedy))
+    if message:
+        payload["message"] = str(message)
+    return payload
+
+
 # ── multipart/form-data 解析（手寫，避開已棄用的 cgi）──────────────────
 def _parse_multipart(body: bytes, boundary: bytes):
     """回傳 (fields: dict[str,str], files: dict[str,(filename, bytes)])。"""
@@ -411,7 +447,13 @@ class TranscribeServer:
                     _code = ("RECORDING_NEEDS_FFMPEG"
                              if ext.lower() == ".webm"
                              else "VIDEO_NEEDS_FFMPEG")
-                    self._reply_coded(req, 409, _code, {}, _remedy)
+                    _params = {"remedy": _remedy}
+                    if job is not None and self._registry is not None:
+                        self._registry.fail(
+                            job.job_id,
+                            _capability_error_payload(_code, _params),
+                        )
+                    self._reply_coded(req, 409, _code, _params, _remedy)
                     return
                 wav_path = tmp_dir / "audio.wav"
                 extract_audio_to_wav(in_path, wav_path, ff)
@@ -435,6 +477,13 @@ class TranscribeServer:
             )
             # Check whether cancellation was triggered (disconnect or shutdown)
             _cancelled = cancel_event.is_set()
+        except Exception as exc:
+            if job is not None and self._registry is not None:
+                try:
+                    self._registry.fail(job.job_id, _job_error_value(exc))
+                except Exception:
+                    pass
+            raise
         finally:
             if prev_align is not None and hasattr(eng, "use_aligner"):
                 eng.use_aligner = prev_align
@@ -532,11 +581,7 @@ class TranscribeServer:
         Body: {"error": {"code": <capability_code>, "params": {...}, "remedy": "..."}}
         """
         body = json.dumps({
-            "error": {
-                "code": capability_code,
-                "params": params or {},
-                "remedy": remedy,
-            }
+            "error": _capability_error_payload(capability_code, params, remedy),
         }, ensure_ascii=False).encode("utf-8")
         req.send_response(http_code)
         req.send_header("Content-Type", "application/json")

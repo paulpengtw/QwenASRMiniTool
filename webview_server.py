@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import queue
+import secrets
 import sys
 import tempfile
 import threading
@@ -67,6 +68,41 @@ _CONTENT_TYPES = {
 }
 
 
+def _job_error_value(error):
+    """Keep plain errors plain; normalize coded errors for browser rendering."""
+    source = error
+    refusal = getattr(error, "refusal", None)
+    if refusal is not None:
+        source = refusal
+
+    if isinstance(source, dict):
+        code = source.get("code")
+        params = source.get("params") or {}
+        message = source.get("message")
+        remedy = source.get("remedy")
+    else:
+        code = getattr(source, "code", None)
+        params = getattr(source, "params", {}) or {}
+        message = getattr(source, "message", None)
+        remedy = getattr(source, "remedy", None)
+
+    if not code:
+        return str(error)
+
+    params = dict(params)
+    if not message:
+        from capability_codes import render
+        message = render(str(code), params, lang="en")
+    payload = {
+        "code": str(code),
+        "params": params,
+        "message": str(message),
+    }
+    if remedy:
+        payload["remedy"] = str(remedy)
+    return payload
+
+
 class _EventHub:
     """SSE 廣播：每個連線一個 Queue，publish() 推給全部訂閱者。"""
 
@@ -106,7 +142,7 @@ class WebViewServer:
         # Wire the registry to the backend so on_sse_client_disconnected() can
         # call capture_client_closed() when a recording SSE client drops.
         # (Gap fix: _job_registry was never assigned, so reg was always None.)
-        self.backend._job_registry = self.registry
+        self.backend.attach_job_registry(self.registry)
         # Publish registry events as SSE "job" events
         self.registry.subscribe(
             lambda ev, payload: self.hub.publish("job", {"event": ev, "payload": payload})
@@ -121,6 +157,10 @@ class WebViewServer:
         # Access key for POST /api/quit (same as the session access key).
         # Set by the launcher; None means the endpoint is not enabled.
         self.quit_access_key: str | None = None
+        # Session key for browser API calls and SSE.  Kept optional so direct
+        # embedded/test use remains backwards-compatible until the launcher
+        # has created a session.
+        self.access_key: str | None = None
         # Flag: False -> refuse new work with 503 APP_STOPPING (ticket 11).
         self._accepting_work: bool = True
 
@@ -171,10 +211,29 @@ class WebViewServer:
                     return False
                 return True
 
+            def _check_access_key(self) -> bool:
+                """Require the session key for browser API calls when configured."""
+                key = server.access_key
+                if not key:
+                    return True
+                auth = self.headers.get("Authorization", "")
+                got = auth[7:].strip() if auth.startswith("Bearer ") else ""
+                if not got:
+                    got = self.headers.get("X-Access-Key", "").strip()
+                if not got:
+                    from urllib.parse import parse_qs
+                    got = parse_qs(urlparse(self.path).query).get("k", [""])[0]
+                if got and secrets.compare_digest(got, key):
+                    return True
+                self._err(401, "invalid access key")
+                return False
+
             # ── GET ───────────────────────────────────────────
             def do_GET(self):
                 path = urlparse(self.path).path
                 if (path.startswith("/api/") or path == "/health") and not self._check_host():
+                    return
+                if path.startswith("/api/") and not self._check_access_key():
                     return
                 if path == "/health":
                     b = server.backend
@@ -241,6 +300,15 @@ class WebViewServer:
                 path = urlparse(self.path).path
                 if not self._check_host():        # 所有 POST 皆為 /api，一律驗證
                     return
+                if not self._check_access_key():
+                    return
+                if path == "/api/transcribe" and not server._accepting_work:
+                    from shutdown import APP_STOPPING
+                    return self._json(
+                        {"error": {"code": APP_STOPPING,
+                                    "message": "server is stopping"}},
+                        503,
+                    )
                 try:
                     if path == "/api/settings":
                         return self._json(server.backend.set_settings(self._read_json_body()))
@@ -462,7 +530,7 @@ class WebViewServer:
                         server.registry.finish(job_id, result=result)
                     except Exception as exc:
                         try:
-                            server.registry.fail(job_id, str(exc))
+                            server.registry.fail(job_id, _job_error_value(exc))
                         except Exception:
                             pass
                     finally:

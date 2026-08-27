@@ -81,7 +81,7 @@ class Job:
         # Results
         self.segments: List[Dict[str, Any]] = []
         self.result: Any = None
-        self.error: Optional[str] = None
+        self.error: Any = None
         self.notes: List[str] = []
         self.saved_paths: List[str] = []
 
@@ -282,7 +282,7 @@ class JobRegistry:
             job.finished_at = self._clock()
         self._notify("finished", {"job_id": job_id})
 
-    def fail(self, job_id: str, error: str) -> None:
+    def fail(self, job_id: str, error: Any) -> None:
         """Mark a job failed, retaining partial segments and the error message."""
         with self._lock:
             job = self._jobs[job_id]
@@ -394,7 +394,7 @@ class JobRegistry:
             item["result"] = result
         self._notify("item_finished", {"job_id": job_id, "item_index": item_index})
 
-    def item_fail(self, job_id: str, item_index: int, error: str) -> None:
+    def item_fail(self, job_id: str, item_index: int, error: Any) -> None:
         """Fail one item; the batch continues with remaining items."""
         with self._lock:
             item = self._jobs[job_id].items[item_index]

@@ -304,6 +304,7 @@ class TestResolve:
         assert decision.kind == "reuse"
         assert decision.url == "http://127.0.0.1:8888/"
         assert decision.pid == 55555
+        assert decision.access_key == "test-key"
 
     def test_alive_unhealthy_identity_matches_gives_takeover(self, tmp_base):
         _write_session_with_identity(tmp_base, _stored_identity_matches())
