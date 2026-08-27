@@ -1502,7 +1502,7 @@
   if (SessionState) {
     const _SSE_EVENTS = [
       "reconnecting", "connected", "stopping", "stopped",
-      "status", "tunnel", "endpoint",
+      "status", "tunnel",
       "submitted", "started", "finished", "failed", "cancelled", "progress",
       "segments_appended", "segment_edited", "path_saved", "note_added",
       "item_started", "item_finished", "item_failed",

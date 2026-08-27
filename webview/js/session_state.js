@@ -88,10 +88,6 @@
     if (event === "tunnel") {
       return Object.assign({}, state, { tunnel: payload });
     }
-    if (event === "endpoint") {
-      return Object.assign({}, state, { endpoint: payload });
-    }
-
     // ---- job events ----
     if (!payload || payload.job_id == null) return state;
 

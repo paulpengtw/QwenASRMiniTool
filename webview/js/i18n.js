@@ -62,6 +62,7 @@
     "record.permPrompt": ["按麥克風時將請求授權", "按麦克风时将请求授权", "Will ask permission on record"],
     "record.permDenied": ["麥克風權限被拒。請在視窗網址列的權限圖示中允許麥克風，或於系統設定開放本程式的麥克風存取後再試。", "麦克风权限被拒。请在窗口地址栏的权限图标中允许麦克风，或在系统设置开放本程序的麦克风访问后再试。", "Microphone blocked. Allow it via the permission icon in the address bar, or enable mic access for this app in system settings, then retry."],
     "record.permDeniedShort": ["麥克風被拒", "麦克风被拒", "Mic blocked"],
+    "result.cancelled": ["（已取消，部分結果）", "（已取消，部分结果）", "(Cancelled, partial results)"],
 
     "ep.svcTitle": ["OpenAI 相容轉錄服務", "OpenAI 兼容转录服务", "OpenAI-compatible transcription"],
     "ep.svcDesc": ["讓手機或其他程式透過區網上傳音檔辨識", "让手机或其他程序通过局域网上传音频识别", "Let phones or apps upload audio over LAN"],
@@ -88,6 +89,11 @@
     "status.ready": ["模型已就緒", "模型已就绪", "Model ready"],
     "status.loading": ["載入模型中…", "载入模型中…", "Loading model…"],
     "status.needModel": ["尚未載入模型", "尚未载入模型", "No model loaded"],
+    "stopped.crash": ["應用程式中斷", "应用程序中断", "Application interrupted"],
+    "stopped.instructions": ["請關閉此分頁，或在終端機執行 <code>./run.sh</code> 重新啟動應用程式。", "请关闭此页面，或在终端中执行 <code>./run.sh</code> 重新启动应用程序。", "Close this tab, or run <code>./run.sh</code> in a terminal to relaunch the application."],
+    "stopped.replaced": ["被新版本取代", "被新版本替代", "Replaced by a newer version"],
+    "stopped.signal": ["收到中止信號", "收到中止信号", "Received termination signal"],
+    "stopped.userQuit": ["使用者結束", "用户结束", "User quit"],
     "model.diag": ["診斷", "诊断", "Diagnostics"],
 
     "set.scale": ["介面縮放", "界面缩放", "UI scale"],
