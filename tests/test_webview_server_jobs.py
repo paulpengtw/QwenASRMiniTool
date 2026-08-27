@@ -441,7 +441,12 @@ def test_transcribe_sse_emits_job_event_for_job(srv):
                             if msg.get("event") == "job":
                                 inner = msg["payload"]
                                 jid = (inner.get("payload") or {}).get("job_id")
-                                if jid and jid == job_id_container[0]:
+                                # Accept any job event carrying a job_id.
+                                # job_id_container[0] may still be None when
+                                # the "submitted" event fires synchronously
+                                # inside registry.submit() — before the HTTP
+                                # response is sent and the caller can set it.
+                                if jid:
                                     received.append(msg)
                                     done.set()
                         except Exception:
