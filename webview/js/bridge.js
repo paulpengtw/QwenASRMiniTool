@@ -205,7 +205,12 @@
     async recordSaved(jobId, path) { return apiPost(`/api/jobs/${jobId}/saved`, { path }); },
   };
 
-  // ── web 轉錄：POST /api/transcribe（進度走 SSE job events）──
+  // ── web 轉錄：POST /api/transcribe → wait for job terminal state ──
+  // Resolves with {job_id, segments, srtPath, state} (backward-compatible).
+  // Progress is forwarded to emit("progress", {pct, status}) as before.
+  // Resolution mechanism: SSE "job" events trigger an immediate poll; a 1s
+  // interval poll runs in parallel as a fallback so a missed SSE event can
+  // never hang the UI.  failed → reject; cancelled → resolve with partial.
   async function webTranscribe(opts) {
     if (!opts.file) throw new Error("請先選擇檔案");
     const fd = new FormData();
@@ -222,7 +227,91 @@
       try { msg = (await r.json()).error?.message || msg; } catch {}
       throw new Error(msg);
     }
-    return r.json();   // {job_id, ok}
+    const { job_id } = await r.json();
+    return _waitForJob(job_id);
+  }
+
+  /**
+   * _waitForJob(job_id) — polls GET /api/jobs/<id> every 1s; any incoming
+   * SSE "job" event for this job_id triggers an immediate extra poll.
+   * Returns a Promise<{job_id, segments, srtPath, state}>.
+   */
+  function _waitForJob(job_id) {
+    // JobWait is loaded as a sibling script; gracefully degrade if missing.
+    const JW = (typeof JobWait !== "undefined") ? JobWait : null;
+
+    return new Promise(function (resolve, reject) {
+      let done = false;
+      let pollTimer = null;
+      let offJob = null;
+
+      function cleanup() {
+        done = true;
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        if (offJob) { offJob(); offJob = null; }
+      }
+
+      function handleJobSnapshot(job) {
+        if (done) return;
+        if (!job || job.job_id !== job_id) return;
+
+        // Forward progress (same contract as old code: emit("progress", {pct, status}))
+        if (JW) {
+          const prog = JW.extractProgress(job);
+          if (prog) emit("progress", prog);
+        }
+
+        const dec = JW ? JW.decide(job) : _fallbackDecide(job);
+        if (dec.action === "resolve") {
+          cleanup();
+          resolve(dec.result);
+        } else if (dec.action === "reject") {
+          cleanup();
+          reject(dec.error);
+        }
+      }
+
+      function pollNow() {
+        if (done) return;
+        apiGet("/api/jobs/" + job_id)
+          .then(function (job) { handleJobSnapshot(job); })
+          .catch(function () {}); // ignore; next interval will retry
+      }
+
+      // SSE "job" events: the server publishes {event: ev, payload: payload}
+      // wrapped in the outer "job" event.  Any event for our job_id triggers
+      // an immediate poll to get the full snapshot.
+      offJob = on("job", function (payload) {
+        if (!payload) return;
+        const inner = payload.payload || {};
+        if (inner.job_id === job_id) pollNow();
+      });
+
+      // 1 s interval fallback poll
+      pollTimer = setInterval(pollNow, 1000);
+
+      // Initial poll immediately after submission
+      pollNow();
+    });
+  }
+
+  /** Minimal fallback decide() used if job_wait.js is not loaded. */
+  function _fallbackDecide(job) {
+    const state = job && job.state;
+    if (state === "failed") return { action: "reject", error: new Error(job.error || "Transcription failed") };
+    if (state === "completed" || state === "cancelled") {
+      const paths = Array.isArray(job.saved_paths) ? job.saved_paths : [];
+      return {
+        action: "resolve",
+        result: {
+          job_id: job.job_id,
+          segments: Array.isArray(job.segments) ? job.segments : [],
+          srtPath: paths.length ? paths[paths.length - 1] : null,
+          state: state,
+        },
+      };
+    }
+    return { action: "continue" };
   }
 
   window.QwenAPI = api;

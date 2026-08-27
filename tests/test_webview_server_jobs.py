@@ -260,3 +260,216 @@ def test_sse_emits_job_events(srv):
     assert received[0]["event"] == "job"
     payload = received[0]["payload"]
     assert "event" in payload  # {event: "submitted", payload: ...}
+
+# ---------------------------------------------------------------------------
+# Ticket g1 — browser transcription flow tests
+# ---------------------------------------------------------------------------
+
+
+def _multipart_post(port, path, fields, file_data, filename="test.wav", host=None):
+    """POST multipart/form-data to path.  file_data is bytes for the 'file' field."""
+    import email.generator, io
+    host_hdr = host or f"127.0.0.1:{port}"
+    boundary = b"----TestBoundary1234567890"
+
+    body_parts = []
+    for name, value in fields.items():
+        body_parts.append(
+            b"--" + boundary + b"\r\n"
+            + f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
+            + str(value).encode() + b"\r\n"
+        )
+    # file part
+    body_parts.append(
+        b"--" + boundary + b"\r\n"
+        + (
+            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+            "Content-Type: audio/wav\r\n\r\n"
+          ).encode()
+        + file_data + b"\r\n"
+    )
+    body_parts.append(b"--" + boundary + b"--\r\n")
+    body = b"".join(body_parts)
+
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=body,
+        headers={
+            "Host": host_hdr,
+            "Content-Type": f"multipart/form-data; boundary={boundary.decode()}",
+            "Content-Length": str(len(body)),
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode())
+
+
+def _poll_job(port, job_id, terminal_states=("completed", "failed", "cancelled"),
+              timeout=5.0, interval=0.1):
+    """Poll GET /api/jobs/<id> until state is terminal or timeout."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            job = _get(port, f"/api/jobs/{job_id}")
+            if job.get("state") in terminal_states:
+                return job
+        except Exception:
+            pass
+        time.sleep(interval)
+    raise TimeoutError(f"job {job_id} did not reach terminal state within {timeout}s")
+
+
+def test_get_individual_job_route(srv):
+    """GET /api/jobs/<id> returns the job dict for a known job."""
+    server, port = srv
+    job = server.registry.submit(kind="single", spec={"path": "/fake/individual.wav"})
+    result = _get(port, f"/api/jobs/{job.job_id}")
+    assert result["job_id"] == job.job_id
+    assert result["state"] == "queued"
+    assert "segments" in result
+
+
+def test_get_individual_job_not_found(srv):
+    """GET /api/jobs/no-such-id returns 404."""
+    server, port = srv
+    try:
+        _get(port, "/api/jobs/no-such-id-xyz")
+        assert False, "expected HTTP 404"
+    except urllib.error.HTTPError as e:
+        assert e.code == 404
+
+
+def test_transcribe_returns_job_id(srv):
+    """POST /api/transcribe with a stub engine returns {job_id, ok}."""
+    server, port = srv
+    # Minimal valid WAV: 44-byte header + 100 bytes silence
+    wav_data = (
+        b"RIFF" + (100 + 36).to_bytes(4, "little") +
+        b"WAVEfmt " + (16).to_bytes(4, "little") +
+        (1).to_bytes(2, "little") +   # PCM
+        (1).to_bytes(2, "little") +   # mono
+        (16000).to_bytes(4, "little") +  # sample rate
+        (32000).to_bytes(4, "little") +  # byte rate
+        (2).to_bytes(2, "little") +   # block align
+        (16).to_bytes(2, "little") +  # bits per sample
+        b"data" + (100).to_bytes(4, "little") +
+        b"\x00" * 100
+    )
+    result = _multipart_post(port, "/api/transcribe", {}, wav_data, "test.wav")
+    assert "job_id" in result
+    assert result.get("ok") is True
+
+
+def test_transcribe_job_completes_with_segments_and_srt_path(srv):
+    """POST /api/transcribe → poll /api/jobs/<id> until completed → segments + srtPath."""
+    server, port = srv
+    wav_data = (
+        b"RIFF" + (100 + 36).to_bytes(4, "little") +
+        b"WAVEfmt " + (16).to_bytes(4, "little") +
+        (1).to_bytes(2, "little") +
+        (1).to_bytes(2, "little") +
+        (16000).to_bytes(4, "little") +
+        (32000).to_bytes(4, "little") +
+        (2).to_bytes(2, "little") +
+        (16).to_bytes(2, "little") +
+        b"data" + (100).to_bytes(4, "little") +
+        b"\x00" * 100
+    )
+    result = _multipart_post(port, "/api/transcribe", {}, wav_data, "audio.wav")
+    job_id = result["job_id"]
+
+    job = _poll_job(port, job_id)
+    assert job["state"] == "completed"
+    assert len(job["segments"]) == 2
+    assert job["segments"][0]["text"] == "hello"
+    assert "/fake/out.srt" in job["saved_paths"]
+
+
+def test_transcribe_failing_stub_yields_failed_state(srv):
+    """A failing transcribe stub → job state is 'failed' with the error message."""
+    server, port = srv
+
+    # Temporarily replace transcribe with a failing stub
+    original = server.backend.transcribe
+    def _failing_transcribe(opts, progress_cb=None):
+        raise RuntimeError("stub engine exploded")
+    server.backend.transcribe = _failing_transcribe
+
+    try:
+        wav_data = (
+            b"RIFF" + (100 + 36).to_bytes(4, "little") +
+            b"WAVEfmt " + (16).to_bytes(4, "little") +
+            (1).to_bytes(2, "little") +
+            (1).to_bytes(2, "little") +
+            (16000).to_bytes(4, "little") +
+            (32000).to_bytes(4, "little") +
+            (2).to_bytes(2, "little") +
+            (16).to_bytes(2, "little") +
+            b"data" + (100).to_bytes(4, "little") +
+            b"\x00" * 100
+        )
+        result = _multipart_post(port, "/api/transcribe", {}, wav_data, "fail.wav")
+        job_id = result["job_id"]
+
+        job = _poll_job(port, job_id)
+        assert job["state"] == "failed"
+        assert "stub engine exploded" in (job.get("error") or "")
+    finally:
+        server.backend.transcribe = original
+
+
+def test_transcribe_sse_emits_job_event_for_job(srv):
+    """POST /api/transcribe → SSE emits a 'job' event referencing the new job_id."""
+    server, port = srv
+    received = []
+    done = threading.Event()
+    job_id_container = [None]
+
+    def _reader():
+        try:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/events",
+                headers={"Host": f"127.0.0.1:{port}"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                for line in resp:
+                    line = line.decode("utf-8").strip()
+                    if line.startswith("data:"):
+                        try:
+                            msg = json.loads(line[5:].strip())
+                            if msg.get("event") == "job":
+                                inner = msg["payload"]
+                                jid = (inner.get("payload") or {}).get("job_id")
+                                if jid and jid == job_id_container[0]:
+                                    received.append(msg)
+                                    done.set()
+                        except Exception:
+                            pass
+                    if done.is_set():
+                        break
+        except Exception:
+            done.set()
+
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
+    time.sleep(0.2)
+
+    wav_data = (
+        b"RIFF" + (100 + 36).to_bytes(4, "little") +
+        b"WAVEfmt " + (16).to_bytes(4, "little") +
+        (1).to_bytes(2, "little") +
+        (1).to_bytes(2, "little") +
+        (16000).to_bytes(4, "little") +
+        (32000).to_bytes(4, "little") +
+        (2).to_bytes(2, "little") +
+        (16).to_bytes(2, "little") +
+        b"data" + (100).to_bytes(4, "little") +
+        b"\x00" * 100
+    )
+    result = _multipart_post(port, "/api/transcribe", {}, wav_data, "sse_test.wav")
+    job_id_container[0] = result["job_id"]
+
+    done.wait(timeout=5)
+    assert len(received) >= 1
+    assert received[0]["event"] == "job"

@@ -126,3 +126,77 @@ test("SessionState applySnapshot + applyEvent round-trip used by app.js logic", 
   assert.equal(state.connection.status, "connected");
   assert.equal(state.jobs.length, 2);
 });
+
+// ---------------------------------------------------------------------------
+// Ticket g1: job_wait.js wiring in index.html
+// ---------------------------------------------------------------------------
+
+test("index.html loads job_wait.js before bridge.js", () => {
+  const fs = require("fs");
+  const path = require("path");
+  const indexHtml = fs.readFileSync(
+    path.join(__dirname, "../../webview/index.html"),
+    "utf-8"
+  );
+  const jwIdx = indexHtml.indexOf("job_wait.js");
+  const brIdx = indexHtml.indexOf("bridge.js");
+  assert.ok(jwIdx >= 0, "job_wait.js not found in index.html");
+  assert.ok(brIdx >= 0, "bridge.js not found in index.html");
+  assert.ok(jwIdx < brIdx, "job_wait.js must be loaded before bridge.js");
+});
+
+test("bridge.js references _waitForJob", () => {
+  const fs = require("fs");
+  const path = require("path");
+  const bridgeJs = fs.readFileSync(
+    path.join(__dirname, "../../webview/js/bridge.js"),
+    "utf-8"
+  );
+  assert.ok(bridgeJs.includes("_waitForJob"), "bridge.js must define _waitForJob");
+});
+
+test("bridge.js webTranscribe calls _waitForJob", () => {
+  const fs = require("fs");
+  const path = require("path");
+  const bridgeJs = fs.readFileSync(
+    path.join(__dirname, "../../webview/js/bridge.js"),
+    "utf-8"
+  );
+  // webTranscribe must resolve via _waitForJob, not return r.json() directly
+  const webTranscribeFn = bridgeJs.slice(
+    bridgeJs.indexOf("async function webTranscribe"),
+    bridgeJs.indexOf("function _waitForJob")
+  );
+  assert.ok(webTranscribeFn.includes("_waitForJob(job_id)"), "webTranscribe must call _waitForJob(job_id)");
+  assert.ok(!webTranscribeFn.includes("return r.json()"), "webTranscribe must not return r.json() directly");
+});
+
+test("app.js stores _curJobId from transcribe result", () => {
+  const fs = require("fs");
+  const path = require("path");
+  const appJs = fs.readFileSync(
+    path.join(__dirname, "../../webview/js/app.js"),
+    "utf-8"
+  );
+  assert.ok(appJs.includes("_curJobId = res.job_id"), "app.js must store _curJobId from res.job_id");
+});
+
+test("app.js calls API.editSegment when _curJobId is set", () => {
+  const fs = require("fs");
+  const path = require("path");
+  const appJs = fs.readFileSync(
+    path.join(__dirname, "../../webview/js/app.js"),
+    "utf-8"
+  );
+  assert.ok(appJs.includes("API.editSegment(_curJobId"), "app.js must call API.editSegment with _curJobId");
+});
+
+test("app.js calls API.recordSaved when _curJobId is set", () => {
+  const fs = require("fs");
+  const path = require("path");
+  const appJs = fs.readFileSync(
+    path.join(__dirname, "../../webview/js/app.js"),
+    "utf-8"
+  );
+  assert.ok(appJs.includes("API.recordSaved(_curJobId"), "app.js must call API.recordSaved with _curJobId");
+});

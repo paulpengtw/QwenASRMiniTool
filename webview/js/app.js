@@ -143,6 +143,7 @@
 
   // 轉錄
   let running = false;
+  let _curJobId = null;  // job_id of the last transcription, for editSegment/recordSaved
   $("#btn-run").addEventListener("click", async () => {
     if (!picked || running) return;
     running = true;
@@ -160,8 +161,10 @@
         align: $("#sw-align").checked,
         hint: $("#hint-box").value.trim(),
       });
+      _curJobId = res.job_id || null;
       renderResult(res.segments);
-      logLine("✓ 完成，共 " + res.segments.length + " 段" + (res.srtPath ? "，已輸出 " + res.srtPath : ""));
+      const cancelNote = res.state === "cancelled" ? T("result.cancelled", "（已取消，部分結果）") + " " : "";
+      logLine(cancelNote + "✓ 完成，共 " + (res.segments || []).length + " 段" + (res.srtPath ? "，已輸出 " + res.srtPath : ""));
       $("#btn-open-dir").disabled = false;
       $("#btn-save-sub").disabled = false;
     } catch (err) {
@@ -353,6 +356,10 @@
         const pieces = SegmentOps.splitSegment(curSegs[idx], val);
         curSegs.splice(idx, 1, ...pieces);
         rerenderSubtitleViews();
+        // Optimistic local update already done above; also persist to server.
+        if (_curJobId) {
+          API.editSegment(_curJobId, idx, val).catch(() => {});
+        }
       } else {
         txt.textContent = orig;               // 取消或清空 → 還原
       }
@@ -592,6 +599,11 @@
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     logLine("✓ 已存檔字幕：" + a.download);
+    // Record the save path on the server job (best-effort; browser download
+    // path is opaque, so we record the filename the browser offered).
+    if (_curJobId) {
+      API.recordSaved(_curJobId, a.download).catch(() => {});
+    }
   }
   $("#btn-save-sub").addEventListener("click", saveSubtitle);
 
@@ -681,7 +693,8 @@
           diarize: $("#sw-batch-diar").checked, nSpeakers: $("#sel-batch-spk").value,
           align: $("#sw-align").checked, hint: "",
         });
-        it.status = "done"; it.progress = 1; it.srtPath = res.srtPath;
+        it.status = (res.state === "cancelled") ? "cancelled" : "done";
+        it.progress = 1; it.srtPath = res.srtPath; it.job_id = res.job_id || null;
       } catch (err) {
         it.status = "failed"; it.progress = 0;
         it.error = (err.message || String(err)).replace(/^⚠\s*/, "");
