@@ -63,6 +63,17 @@ test("app.js calls applyEvent", () => {
   );
 });
 
+test("app.js subscribes to live registry events and keeps endpoint snapshot-only", () => {
+  const match = appJs.match(/const _SSE_EVENTS = \[(.*?)\];/s);
+  assert.ok(match, "app.js must define the SessionState SSE event list");
+  const events = [...match[1].matchAll(/["']([^"']+)["']/g)].map(item => item[1]);
+
+  assert.ok(!events.includes("endpoint"), "endpoint state is delivered by snapshots, not SSE");
+  for (const event of ["note_added", "item_started", "item_finished", "item_failed"]) {
+    assert.ok(events.includes(event), `app.js must subscribe to ${event}`);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // _bridge_snapshot handler processes snap.jobs
 // ---------------------------------------------------------------------------

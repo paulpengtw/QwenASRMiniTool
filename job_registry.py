@@ -392,7 +392,10 @@ class JobRegistry:
             item = self._jobs[job_id].items[item_index]
             item["state"] = "completed"
             item["result"] = result
-        self._notify("item_finished", {"job_id": job_id, "item_index": item_index})
+        self._notify(
+            "item_finished",
+            {"job_id": job_id, "item_index": item_index, "result": result},
+        )
 
     def item_fail(self, job_id: str, item_index: int, error: Any) -> None:
         """Fail one item; the batch continues with remaining items."""
@@ -451,11 +454,13 @@ class JobRegistry:
         Transitions the job to ``completed`` with a note; already-transcribed
         segments are retained.
         """
+        note = "ended early - capture client closed"
         with self._lock:
             job = self._jobs[job_id]
-            job.notes.append("ended early - capture client closed")
+            job.notes.append(note)
             job.state = "completed"
             job.finished_at = self._clock()
+        self._notify("note_added", {"job_id": job_id, "note": note})
         self._notify(
             "finished",
             {"job_id": job_id, "note": "capture_client_closed"},

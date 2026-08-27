@@ -673,6 +673,19 @@ class TestSubscribers:
         reg.finish(job.job_id)
         assert any(e[0] == "finished" for e in events)
 
+    def test_subscriber_notified_when_capture_client_closes_with_note(self):
+        reg = make_registry()
+        events: List[Tuple[str, Any]] = []
+        reg.subscribe(lambda name, payload: events.append((name, payload)))
+        job = reg.submit("recording", spec={}, client_id="c1")
+
+        reg.capture_client_closed(job.job_id)
+
+        assert ("note_added", {
+            "job_id": job.job_id,
+            "note": "ended early - capture client closed",
+        }) in events
+
     def test_subscriber_notified_on_cancel(self):
         reg = make_registry()
         events: List[Tuple[str, Any]] = []
@@ -698,6 +711,21 @@ class TestSubscribers:
         reg.start(job.job_id)
         reg.update_progress(job.job_id, done=5, total=10)
         assert any(e[0] == "progress" for e in events)
+
+    def test_batch_item_finished_event_includes_result(self):
+        reg = make_registry()
+        events: List[Tuple[str, Any]] = []
+        reg.subscribe(lambda name, payload: events.append((name, payload)))
+        job = reg.submit("batch", spec={"items": ["a.wav"]})
+
+        reg.item_start(job.job_id, 0)
+        reg.item_finish(job.job_id, 0, result={"text": "done"})
+
+        assert ("item_finished", {
+            "job_id": job.job_id,
+            "item_index": 0,
+            "result": {"text": "done"},
+        }) in events
 
     def test_subscriber_notified_on_segments(self):
         reg = make_registry()

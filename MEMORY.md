@@ -30,6 +30,8 @@ Regenerate after any change to `pyproject.toml` or `uv.lock`:
 ```bash
 uv export --no-hashes --no-dev > requirements.txt
 ```
+Run `bash scripts/check-requirements-sync.sh` to verify that the checked-in
+file matches a fresh export; never hand-edit it.
 The CI gate (`uv sync --check`) enforces that the lock file is in sync.
 
 ---
@@ -124,6 +126,34 @@ returns 403 ("quit endpoint not configured").
 
 The e2e server helper (`tests/helpers/e2e_server.py`) shows the minimal
 wiring needed.
+
+---
+
+## Browser API/SSE routes require the launcher session key (tickets 11 / 12 / 33)
+
+The launcher installs one per-session access key on `WebViewServer` after it
+starts the server. Once configured, browser `/api/*` requests and
+`/api/events` SSE connections must carry that key (`Authorization: Bearer` or
+the `k` query parameter); `/health` remains the readiness probe. Browser URLs
+opened by the launcher and reused session URLs must include `?k=`.
+
+---
+
+## Transcription submission is asynchronous (ticket 12 / PR 32)
+
+`POST /api/transcribe` returns `{job_id, ok}` rather than finished segments.
+`webview/js/bridge.js` must call `_waitForJob(job_id)`, poll the terminal
+registry state, and resolve with the compatible
+`{job_id, segments, srtPath, state}` shape. Do not make app callers consume
+the initial submit response as if it were a completed transcription.
+
+---
+
+## Codex scratch plans are not deliverables
+
+Codex CLI scratch plans may be written under `docs/superpowers/` during an
+implementation session. They are working notes and must not be committed
+with the product change.
 
 ---
 

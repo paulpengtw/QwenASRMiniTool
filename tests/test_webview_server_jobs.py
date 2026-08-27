@@ -267,6 +267,111 @@ def test_sse_emits_job_events(srv):
     payload = received[0]["payload"]
     assert "event" in payload  # {event: "submitted", payload: ...}
 
+
+def test_sse_forwards_registry_note_added_event(srv):
+    """The registry note event reaches browser clients through the job envelope."""
+    server, port = srv
+    received = []
+    done = threading.Event()
+
+    def _reader():
+        try:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/events",
+                headers={"Host": f"127.0.0.1:{port}"},
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                for line in resp:
+                    line = line.decode("utf-8").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        msg = json.loads(line[5:].strip())
+                    except Exception:
+                        continue
+                    inner = msg.get("payload") or {}
+                    if msg.get("event") == "job" and inner.get("event") == "note_added":
+                        received.append(msg)
+                        done.set()
+                        return
+        except Exception:
+            done.set()
+
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
+    time.sleep(0.2)
+
+    job = server.registry.submit(kind="recording", spec={}, client_id="sse-client")
+    server.registry.capture_client_closed(job.job_id)
+
+    assert done.wait(timeout=2)
+    assert len(received) == 1
+    assert received[0]["payload"] == {
+        "event": "note_added",
+        "payload": {
+            "job_id": job.job_id,
+            "note": "ended early - capture client closed",
+        },
+    }
+
+
+def test_sse_forwards_registry_batch_item_events(srv):
+    """Batch item lifecycle events cross the registry-to-SSE job envelope."""
+    server, port = srv
+    received = []
+    done = threading.Event()
+    job_id_container = [None]
+
+    def _reader():
+        try:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/events",
+                headers={"Host": f"127.0.0.1:{port}"},
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                for line in resp:
+                    line = line.decode("utf-8").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        msg = json.loads(line[5:].strip())
+                    except Exception:
+                        continue
+                    inner = msg.get("payload") or {}
+                    payload = inner.get("payload") or {}
+                    if (
+                        msg.get("event") == "job"
+                        and payload.get("job_id") == job_id_container[0]
+                        and inner.get("event") in {"item_started", "item_finished", "item_failed"}
+                    ):
+                        received.append(inner)
+                        if len(received) == 4:
+                            done.set()
+                            return
+        except Exception:
+            done.set()
+
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
+    time.sleep(0.2)
+
+    job = server.registry.submit(
+        kind="batch",
+        spec={"items": ["a.wav", "b.wav", "c.wav"]},
+    )
+    job_id_container[0] = job.job_id
+    server.registry.item_start(job.job_id, 0)
+    server.registry.item_finish(job.job_id, 0, result={"text": "done"})
+    server.registry.item_start(job.job_id, 1)
+    server.registry.item_fail(job.job_id, 1, error="decode failed")
+
+    assert done.wait(timeout=2)
+    assert [event["event"] for event in received] == [
+        "item_started", "item_finished", "item_started", "item_failed",
+    ]
+    assert received[1]["payload"]["result"] == {"text": "done"}
+    assert received[3]["payload"]["error"] == "decode failed"
+
 # ---------------------------------------------------------------------------
 # Ticket g1 — browser transcription flow tests
 # ---------------------------------------------------------------------------

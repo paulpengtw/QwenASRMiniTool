@@ -24,11 +24,11 @@ a ten-second deadline.
 | M-02 | medium | `webview_server.py:511-534`, `api_server.py:288-292`, `api_server.py:420-435` | Coded job failures were either stringified in the webview registry or left running on the endpoint exception/refusal paths; the browser therefore lost `{code, params, message}`. | Fixed; coded errors are normalized and endpoint jobs become terminal failed jobs. |
 | M-03 | medium | `webview_server.py:147-148`, `webview/js/bridge.js:53-63`, `webview/js/app.js:1503-1513` | Registry updates were sent as an outer `job` envelope, but the app reducer listened for the inner event names; registry progress also used `done/total/message` while the legacy UI read `pct/status`. | Fixed; bridge preserves `job` for polling, unwraps inner events, and adds the UI progress aliases. |
 | M-04 | medium | `webview/js/bridge.js:45-50`, `webview/js/bridge.js:79-84`, `webview/js/bridge.js:119-121`, `webview/js/app.js:1503-1518` | The app subscribed to canonical `connected`, `reconnecting`, and `stopped`, but the bridge originally emitted only private bridge event names. | Fixed; canonical lifecycle events are emitted with the shutdown/crash reason. |
-| L-01 | low | `webview/js/app.js:166`, `webview/js/app.js:1451-1463`; `webview/js/i18n.js:1-128` | Six `T()` keys have no zh-TW/zh-CN/en table entry: `result.cancelled`, `stopped.crash`, `stopped.instructions`, `stopped.replaced`, `stopped.signal`, `stopped.userQuit`. | Deferred: every call has a readable literal fallback and this does not change the contract shape. |
-| L-02 | low | `webview/js/app.js:1503-1508`; no matching publisher in `job_registry.py`/`webview_backend.py` | `endpoint` and `note_added` are reducer listener names without a live publisher; `item_segments_appended` is published by the registry but deliberately omitted from the app listener list. | Deferred: endpoint changes call `renderEndpoint()` and reconnects use `/api/snapshot`; notes/segment data are recovered from snapshots, and the current browser batch UI does not consume item segment events. |
+| L-01 | low | `webview/js/app.js:166`, `webview/js/app.js:1451-1463`; `webview/js/i18n.js:1-128` | Six `T()` keys had no zh-TW/zh-CN/en table entry: `result.cancelled`, `stopped.crash`, `stopped.instructions`, `stopped.replaced`, `stopped.signal`, `stopped.userQuit`. | Fixed; all six entries were added and `tests/js/i18n_contract.test.js` now scans every literal app call. |
+| L-02 | low | `webview/js/app.js:1503-1508`; `job_registry.py` subscriber events | `endpoint` and `note_added` were reducer listener names without a live publisher; `item_segments_appended` is published by the registry but deliberately omitted from the app listener list. | Fixed; endpoint is snapshot-only, recording closure publishes `note_added`, and live batch item lifecycle events retain their reducer listeners and payloads. |
 
-All high and medium findings are fixed below.  The two low findings are the
-only items intentionally left out of the implementation pass.
+All findings are fixed below; the low findings are included in the final
+contract pass.
 
 ## 1. `window.QwenAPI` resolved-shape audit
 
@@ -138,7 +138,7 @@ launcher/explicit lifecycle control.
 | Shutdown at `app_webview.py:430` | `stopping` with `reason` | Bridge forwards and calls `_handleStopped`; app shows the stopped overlay at `app.js:1521-1523` and applies the canonical state event. |
 | Webview direct transcription at `webview_server.py:522` | `progress` with `{job_id,pct,status}` | Bridge forwards unchanged; app’s legacy progress consumer reads the exact fields. |
 | Registry subscription at `webview_server.py:147-148` | Outer `job` envelope containing every registry event | Bridge emits `job` for `_waitForJob()` and unwraps `{event,payload}` to the inner event at `bridge.js:53-63`. App’s reducer receives the inner names listed below. |
-| `JobRegistry._notify()` | `submitted`, `started`, `finished`, `failed`, `cancelled`, `progress`, `segments_appended`, `segment_edited`, `path_saved`, `item_started`, `item_finished`, `item_failed`, `item_segments_appended` | All are serializable registry payloads. The bridge unwraps all of them. App applies every corresponding reducer event in `app.js:1503-1513` except `item_segments_appended`, which is deliberately snapshot-backed (L-02). |
+| `JobRegistry._notify()` | `submitted`, `started`, `finished`, `failed`, `cancelled`, `progress`, `segments_appended`, `segment_edited`, `path_saved`, `note_added`, `item_started`, `item_finished`, `item_failed`, `item_segments_appended` | All are serializable registry payloads. The bridge unwraps all of them. App applies every corresponding reducer event in `app.js:1503-1513` except `item_segments_appended`, which is deliberately snapshot-backed. |
 
 Registry progress is `{job_id,done,total,message}` at
 `job_registry.py:343-345`, while the pre-existing progress bar reads
@@ -151,7 +151,7 @@ shape.
 The app’s reducer listener list is `app.js:1503-1508`:
 
 `reconnecting`, `connected`, `stopping`, `stopped`, `status`, `tunnel`,
-`endpoint`, `submitted`, `started`, `finished`, `failed`, `cancelled`,
+`submitted`, `started`, `finished`, `failed`, `cancelled`,
 `progress`, `segments_appended`, `segment_edited`, `path_saved`, `note_added`,
 `item_started`, `item_finished`, and `item_failed`.
 
@@ -162,11 +162,15 @@ the private `_bridge_stopped` event remains the overlay hook at
 `app.js:1517-1519`.  Thus all three connection lifecycle events now reach the
 reducer.
 
-`endpoint` and `note_added` have no live producer, and
-`item_segments_appended` is intentionally not in the app listener list.  They
-are the deferred low finding L-02: endpoint actions explicitly call
-`renderEndpoint()`, while notes and item segment contents are canonical in the
-next `/api/snapshot`.
+`endpoint` is intentionally not an SSE listener: endpoint actions explicitly
+call `renderEndpoint()`, and the canonical endpoint state arrives in the next
+`/api/snapshot`.  `JobRegistry.capture_client_closed()` now publishes
+`note_added` with the same note string stored in the registry, so the existing
+reducer listener receives recording notes live.  The registry’s
+`item_started`, `item_finished`, and `item_failed` events remain live and
+`item_finished` carries its result.  `item_segments_appended` remains
+snapshot-backed because the current browser batch UI does not consume item
+segment events.
 
 ## 4. HTML assets, globals, and i18n
 
@@ -201,9 +205,9 @@ stopped.signal         stopped.userQuit
 sub.edit               sub.mergeNext
 ```
 
-All keys except the six in L-01 have three locale entries in
-`webview/js/i18n.js`.  L-01 is safe to defer because each missing key is called
-with a localized/plain literal fallback.
+Every static key has three locale entries in `webview/js/i18n.js`; the new
+`tests/js/i18n_contract.test.js` source check keeps this table complete when a
+new literal `T()` call is added.
 
 ## 5. Headless smoke and Windows import guard
 
@@ -235,11 +239,12 @@ red observations and the final green commands were:
 | M-02 | Structured job error initially became `"[object Object]"`; coded endpoint refusal initially returned no human message and left the registry job `running`; a coded engine exception also left its registry job `running`. | `node --test tests/js/job_wait.test.js` and `pytest tests/test_workflow_contract.py tests/test_webview_server_jobs.py` → green; coded registry errors retain `{code,params,message}` and plain-string failures remain supported. |
 | M-03 | Bridge envelope test initially saw no `finished`/normalized progress payload at the app event names. | The same `bridge_contract.test.js` run → 7 passed, including envelope and progress assertions. |
 | M-04 | Canonical lifecycle test initially counted `connected === 0`; the stopped test initially received `null`. | `node --test tests/js/bridge_contract.test.js` → 7 passed, including `connected`, `reconnecting`, and `stopped(reason)`. |
+| L-01 | The new source-contract test initially failed with exactly the six audited missing keys. | `node --test tests/js/i18n_contract.test.js` → 1 passed; the full JavaScript suite also passed. |
+| L-02 | New reducer/listener tests initially failed because `endpoint` was subscribed and applied; registry/SSE tests initially received no `note_added` event and item completion omitted its result. | `node --test tests/js/session_state.test.js tests/js/app_snapshot_wiring.test.js` → 46 passed; focused registry/server tests → 94 passed, including live note and batch-item SSE forwarding. |
 
 ## Deferred / not findings
 
-- L-01 and L-02 are listed above and intentionally deferred for the reasons
-  given in their rows.
+- No browser-contract findings remain deferred.
 - No transcribe result-shape mismatch was found: single-file, batch, and
   recording all consume the bridge’s `{job_id,segments,srtPath,state}` result.
 - No missing bridge route, wrong route verb, wrong JSON/multipart parameter, or

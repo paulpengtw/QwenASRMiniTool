@@ -131,6 +131,16 @@ test("applyEvent tunnel updates tunnel", () => {
   assert.deepEqual(s1.tunnel, { running: true, url: "https://t.example" });
 });
 
+test("applyEvent endpoint is ignored because endpoint state is snapshot-backed", () => {
+  const s0 = applySnapshot(initialState(), {
+    status: {},
+    jobs: { jobs: [] },
+    endpoint: { running: false },
+  });
+  const s1 = applyEvent(s0, "endpoint", { running: true, port: 11435 });
+  assert.equal(s1, s0);
+});
+
 // ---------------------------------------------------------------------------
 // applyEvent — job submitted
 // ---------------------------------------------------------------------------
@@ -200,6 +210,56 @@ test("applyEvent progress updates job progress fields", () => {
   assert.equal(s1.jobs[0].progress.done, 3);
   assert.equal(s1.jobs[0].progress.total, 10);
   assert.equal(s1.jobs[0].progress.message, "transcribing");
+});
+
+test("applyEvent note_added appends a registry note", () => {
+  const snap = {
+    status: {},
+    jobs: {
+      jobs: [{ job_id: "j1", kind: "recording", state: "completed", segments: [], notes: [], saved_paths: [] }],
+    },
+  };
+  const s0 = applySnapshot(initialState(), snap);
+  const s1 = applyEvent(s0, "note_added", {
+    job_id: "j1",
+    note: "ended early - capture client closed",
+  });
+  assert.deepEqual(s1.jobs[0].notes, ["ended early - capture client closed"]);
+});
+
+test("applyEvent batch item lifecycle events update item state and result", () => {
+  const snap = {
+    status: {},
+    jobs: {
+      jobs: [{
+        job_id: "batch-1",
+        kind: "batch",
+        state: "running",
+        segments: [],
+        notes: [],
+        saved_paths: [],
+        items: [
+          { spec: { path: "a.wav" }, state: "queued", error: null, result: null, segments: [] },
+          { spec: { path: "b.wav" }, state: "queued", error: null, result: null, segments: [] },
+        ],
+      }],
+    },
+  };
+  let state = applySnapshot(initialState(), snap);
+  state = applyEvent(state, "item_started", { job_id: "batch-1", item_index: 0 });
+  assert.equal(state.jobs[0].items[0].state, "running");
+
+  state = applyEvent(state, "item_finished", {
+    job_id: "batch-1", item_index: 0, result: { text: "done" },
+  });
+  assert.equal(state.jobs[0].items[0].state, "completed");
+  assert.deepEqual(state.jobs[0].items[0].result, { text: "done" });
+
+  state = applyEvent(state, "item_failed", {
+    job_id: "batch-1", item_index: 1, error: "decode failed",
+  });
+  assert.equal(state.jobs[0].items[1].state, "failed");
+  assert.equal(state.jobs[0].items[1].error, "decode failed");
 });
 
 // ---------------------------------------------------------------------------
