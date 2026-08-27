@@ -9,8 +9,13 @@ Windows 不像 POSIX 會在父行程死亡時連帶回收子程序——若使�
 到一半」關窗、或主行程崩潰／被工作管理員強制結束，這些子程序就成為孤兒
 殘留（仍佔 GPU / 記憶體）。
 
-解法
-----
+注意：POSIX（Linux / macOS）不會在父行程死亡時自動終止子程序——孤兒行程
+會被 init（PID 1）收養並繼續執行，佔用 GPU / 記憶體。Linux 的子程序清理
+由 platform_seams.guard_children() 負責：使用 PR_SET_PDEATHSIG + killpg，
+行為與本模組的 Windows Job Object 對等。
+
+解法（Windows）
+--------------
 把主行程綁進一個 **KILL_ON_JOB_CLOSE 的 Windows Job Object**：之後衍生的
 子程序會自動繼承同一個 Job；當主行程的最後一個 Job handle 關閉（即主行程
 結束，含被強制結束／崩潰）時，OS 會自動終止 Job 內所有成員 → 子程序無一

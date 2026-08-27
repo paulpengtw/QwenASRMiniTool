@@ -1247,7 +1247,7 @@ class App(ctk.CTk):
             row2, text="📁  開啟輸出資料夾", width=150, height=36,
             font=FONT_BODY, state="disabled",
             fg_color="gray35", hover_color="gray25",
-            command=lambda: os.startfile(str(SRT_DIR)),
+            command=lambda: __import__("platform_seams").open_path(str(SRT_DIR)),
         )
         self.open_dir_btn.pack(side="left")
 
@@ -3241,7 +3241,7 @@ class App(ctk.CTk):
             t = end + 0.1
         out = write_transcript(SRT_DIR / f"realtime_{ts}", lines)
         messagebox.showinfo("儲存完成", f"已儲存至：\n{out}")
-        os.startfile(str(SRT_DIR))
+        __import__("platform_seams").open_path(str(SRT_DIR))
 
     # ── 關閉處理 ───────────────────────────────────────
 
