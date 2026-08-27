@@ -398,3 +398,56 @@ class TestNewCapabilityCodes:
             assert "en" in entry
             assert "zh" in entry
             assert "severity" in entry
+
+
+# ---------------------------------------------------------------------------
+# 7. _job_registry wired to backend (ticket 08 gap)
+# ---------------------------------------------------------------------------
+
+class TestJobRegistryWiring:
+    """Verify that WebViewServer wires its registry to backend._job_registry.
+
+    Gap: _job_registry was never assigned to the backend instance; consequently
+    on_sse_client_disconnected() always obtained None from getattr and never
+    called capture_client_closed().
+    """
+
+    def test_backend_has_job_registry_after_init(self):
+        """WebViewServer.__init__ must set backend._job_registry = self.registry."""
+        sys.path.insert(0, str(ROOT))
+        from webview_server import WebViewServer
+
+        server = WebViewServer(host="127.0.0.1", port=0)
+        assert hasattr(server.backend, "_job_registry"), (
+            "backend._job_registry not set after WebViewServer.__init__"
+        )
+        assert server.backend._job_registry is server.registry, (
+            "backend._job_registry is not the same object as server.registry"
+        )
+
+    def test_sse_disconnect_calls_capture_client_closed(self):
+        """on_sse_client_disconnected() must call registry.capture_client_closed(job_id)."""
+        sys.path.insert(0, str(ROOT))
+        from webview_server import WebViewServer
+
+        server = WebViewServer(host="127.0.0.1", port=0)
+
+        # Submit a recording job (kind="recording" starts in "capturing" state).
+        job = server.registry.submit(kind="recording", spec={"channel": "mono"})
+        job_id = job.job_id
+
+        # Point the backend at the active job.
+        server.backend._recording_job_id = job_id
+
+        # Simulate SSE client disconnect.
+        server.backend.on_sse_client_disconnected()
+
+        # The job should now be completed with the expected note.
+        job_dict = server.registry._jobs[job_id].to_dict()
+        assert job_dict["state"] == "completed", (
+            f"Expected job state 'completed' after disconnect, got {job_dict['state']!r}"
+        )
+        assert any("capture_client_closed" in n or "ended early" in n
+                   for n in job_dict.get("notes", [])), (
+            f"Expected note about capture client closure, got {job_dict.get('notes')}"
+        )
