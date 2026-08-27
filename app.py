@@ -1135,7 +1135,9 @@ class App(ctk.CTk):
         # ── 早期套用：介面縮放與鏡像站（須在建構 UI 與引導畫面前生效）──
         try:
             _early = self._load_settings()
-            ctk.set_widget_scaling(float(_early.get("ui_scale", 1.0)))
+            from settings_store import read_ui_scale_multiplier
+            _sf = getattr(self, "_settings_file", None) or SETTINGS_FILE
+            ctk.set_widget_scaling(read_ui_scale_multiplier(_sf))
             import downloader as _dl
             _dl.set_mirror(_early.get("hf_mirror", ""))
         except Exception:
@@ -1852,7 +1854,8 @@ class App(ctk.CTk):
         ctk.set_appearance_mode(mode)
         # 介面縮放
         try:
-            ctk.set_widget_scaling(float(settings.get("ui_scale", 1.0)))
+            from settings_store import read_ui_scale_multiplier as _rscale
+            ctk.set_widget_scaling(_rscale(SETTINGS_FILE))
         except Exception:
             pass
         # 鏡像站

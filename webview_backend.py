@@ -13,6 +13,7 @@ ASREngine。不依賴 pywebview，也不依賴 HTTP —— 可被 webview_server
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import traceback
 from pathlib import Path
@@ -166,28 +167,45 @@ class WebBackend:
         self._seed_defaults()            # 首次啟動（無 backend）→ 種子預設模型
         self._apply_runtime_prefs()      # 啟動即套用持久化偏好（VAD/簡繁/鏡像/格式）
 
-    # ── 首次啟動預設：1.7B Qwen on CRISPASR Q4（多數機器跑得動）─────────────
-    def _seed_defaults(self):
-        """settings.json 尚無 backend 時，種下預設模型選擇。
+    # ── SettingsStore（懶建立）─────────────────────────────────────────────
+    @property
+    def _store(self):
+        """Lazily create a SettingsStore for this backend instance.
 
-        多數狀況下「Qwen3-ASR-1.7B Q4（CRISPASR/Vulkan）」可順利運行（GPU Vulkan，
-        繁中佳）。寫入 settings 後，後續 _persisted_backend/_load_worker 等皆讀到它。
-        既有使用者（已有 backend）不受影響。
+        The store is created once on first access and cached on the instance.
+        path = core.SETTINGS_FILE or BASE_DIR/settings.json
+        platform = sys.platform (at access time)
+        base_dir = BASE_DIR
         """
-        f = Path(getattr(core, "SETTINGS_FILE", BASE_DIR / "settings.json"))
-        try:
-            cur = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
-        except Exception:
-            cur = {}
-        if cur.get("backend"):
-            return                       # 既有設定 → 不覆寫
-        cur.setdefault("backend", "crispasr")
-        cur.setdefault("crisp_model", "qwen3")
-        cur.setdefault("crisp_qwen_quant", "q4")
-        try:
-            f.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        store = self.__dict__.get("_store_instance")
+        if store is None:
+            from settings_store import SettingsStore
+            path = Path(getattr(core, "SETTINGS_FILE", BASE_DIR / "settings.json"))
+            store = SettingsStore(path, platform=sys.platform, base_dir=BASE_DIR)
+            store.load()
+            self.__dict__["_store_instance"] = store
+        return store
+
+    @_store.setter
+    def _store(self, value):
+        """Allow __init__ / tests to reset the store slot (None → triggers re-init)."""
+        if value is None:
+            self.__dict__.pop("_store_instance", None)
+        else:
+            self.__dict__["_store_instance"] = value
+
+    # ── 首次啟動預設：derive at runtime, never persist ────────────────────
+    def _seed_defaults(self):
+        """Ensure the SettingsStore is loaded.
+
+        Previously this method wrote a default backend into settings.json when
+        none was present.  That is no longer done — the default is now derived
+        at runtime via store.derived_default("backend") in _persisted_backend,
+        so no file I/O is needed here and the file is never created on a fresh
+        install solely because of this call.
+        """
+        # Touch the store so it loads (and recovers from corruption if needed).
+        _ = self._store
 
     # ── 事件推送 ────────────────────────────────────────────
     def _emit(self, event: str, payload: dict):
@@ -243,11 +261,32 @@ class WebBackend:
 
     # ── 各核心載入（重用既有引擎類別與 downloader）─────────────
     def _settings_raw(self) -> dict:
-        try:
-            f = getattr(core, "SETTINGS_FILE", BASE_DIR / "settings.json")
-            return json.loads(Path(f).read_text(encoding="utf-8")) if Path(f).exists() else {}
-        except Exception:
-            return {}
+        """Return a snapshot dict of current settings via the SettingsStore.
+
+        The store's flat-key resolution order ensures Windows callers get
+        exactly the same key-value pairs they got from the raw file read,
+        while Linux callers pick up their namespaced values transparently.
+        """
+        store = self._store
+        # Reload to pick up any external writes (e.g. from set_model before __init__ store).
+        store.load()
+        # Build a flat view covering all known keys so existing call sites that
+        # do s.get("key", default) continue to work without change.
+        _KNOWN_KEYS = [
+            "backend", "cpu_model_size", "crisp_model", "crisp_quant",
+            "crisp_qwen_quant", "device", "endpoint_port", "endpoint_key",
+            "model_dir", "gpu_model_dir", "model_path", "gguf_path",
+            "chatllm_dir", "crispasr_dir", "ffmpeg_path",
+            "output_format", "hf_mirror", "ui_lang", "vad_threshold",
+            "chunk_secs", "appearance", "vocab_convert", "output_simplified",
+            "ui_scale_percent", "ui_scale",
+        ]
+        snap: dict = {}
+        for k in _KNOWN_KEYS:
+            v = store.get(k)
+            if v is not None:
+                snap[k] = v
+        return snap
 
     def _vk_device_id(self, s: dict) -> int:
         import re
@@ -396,26 +435,12 @@ class WebBackend:
     # ── 狀態 ────────────────────────────────────────────────
     def get_capabilities(self) -> dict:
         """Return the full capability snapshot (ticket 05)."""
-        import sys as _sys
         from capabilities import build_snapshot
         from platform_seams import find_executable
-        from settings_store import SettingsStore
 
-        platform = _sys.platform
-        # Build a lightweight SettingsStore wrapper from the raw settings dict.
-        # We use a mock-compatible duck-typed object so we don't need a real path.
-        raw = self._settings_raw()
-
-        class _StoreAdapter:
-            def __init__(self, data):
-                self._data = data
-                self.recovered = None
-                self.session_ignored = []
-
-            def get(self, key, default=None):
-                return self._data.get(key, default)
-
-        store = _StoreAdapter(raw)
+        platform = sys.platform
+        # Pass the real SettingsStore so recovered/session_ignored reach the snapshot.
+        store = self._store
 
         # Probes
         ffmpeg_path = find_executable("ffmpeg")
@@ -517,13 +542,20 @@ class WebBackend:
         return False
 
     def _persisted_backend(self) -> str:
-        try:
-            f = getattr(core, "SETTINGS_FILE", BASE_DIR / "settings.json")
-            if Path(f).exists():
-                return json.loads(Path(f).read_text(encoding="utf-8")).get("backend", "openvino")
-        except Exception:
-            pass
-        return "openvino"
+        """Return the persisted backend preference, or the platform-derived default.
+
+        Uses the SettingsStore so the resolution order (platforms → shared →
+        flat → derived default) is respected.  On a fresh install with no
+        settings.json, the derived default is returned without writing anything.
+        """
+        store = self._store
+        store.load()
+        value = store.get("backend")
+        if value:
+            return value
+        # No persisted value — return derived default (never persisted).
+        derived = store.derived_default("backend")
+        return derived if derived else "openvino"
 
     def _app_version(self) -> str:
         try:
@@ -870,14 +902,11 @@ class WebBackend:
                             f"首次啟用該核心會在啟動時自動下載對應模型。")}
 
     def _persist_backend(self, backend: str):
-        f = Path(getattr(core, "SETTINGS_FILE", BASE_DIR / "settings.json"))
+        store = self._store
+        store.load()
+        store.set("backend", backend)
         try:
-            cur = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
-        except Exception:
-            cur = {}
-        cur["backend"] = backend
-        try:
-            f.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+            store.save()
         except Exception:
             pass
 
@@ -990,17 +1019,16 @@ class WebBackend:
                 },
             }
 
-        f = Path(getattr(core, "SETTINGS_FILE", BASE_DIR / "settings.json"))
+        store = self._store
+        store.load()
+        store.set("backend", backend)
+        for k, v in patch.items():       # cpu_model_size / crisp_model / crisp_quant
+            store.set(k, v)
         try:
-            cur = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
-        except Exception:
-            cur = {}
-        cur["backend"] = backend
-        cur.update(patch)                 # cpu_model_size / crisp_model / crisp_quant
-        try:
-            f.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+            store.save()
         except Exception:
             pass
+        cur = self._settings_raw()       # for identity_for after save
 
         arch = self._BACKEND_LABELS.get(backend, backend)
         # 尚未載入任何核心（首次啟動）→ 可「就地下載並載入」，免重啟（此時沒有
@@ -1184,13 +1212,9 @@ class WebBackend:
 
     # ── 設定（讀寫既有 settings.json）───────────────────────
     def get_settings(self) -> dict:
-        s = {}
-        try:
-            f = getattr(core, "SETTINGS_FILE", BASE_DIR / "settings.json")
-            if Path(f).exists():
-                s = json.loads(Path(f).read_text(encoding="utf-8"))
-        except Exception:
-            s = {}
+        store = self._store
+        store.load()
+        s = self._settings_raw()
         # 簡繁/詞彙：app.py 以 output_simplified + vocab_convert 兩 bool 表達；
         # webview 前端用單一字串（off/s2twp/s2t）。此處還原成字串供前端預選。
         vc = s.get("vocab_convert", True)
@@ -1199,7 +1223,7 @@ class WebBackend:
         else:
             vocab = self._flags_to_vocab(bool(s.get("output_simplified", False)), bool(vc))
         return {
-            "scale": int(s.get("ui_scale", 100)),
+            "scale": store.ui_scale_percent(),        # uses <10 multiplier heuristic
             "format": s.get("output_format", "srt"),
             "vocab": vocab,
             "mirror": s.get("hf_mirror", ""),
@@ -1211,27 +1235,25 @@ class WebBackend:
         }
 
     def set_settings(self, patch: dict) -> dict:
-        f = Path(getattr(core, "SETTINGS_FILE", BASE_DIR / "settings.json"))
-        cur = {}
-        try:
-            if f.exists():
-                cur = json.loads(f.read_text(encoding="utf-8"))
-        except Exception:
-            cur = {}
+        store = self._store
+        store.load()
         patch = patch or {}
         # 簡繁/詞彙：webview 單一字串 → 寫成 app.py 相容的兩個 bool。
         if "vocab" in patch:
             simp, conv = self._vocab_to_flags(patch["vocab"])
-            cur["output_simplified"] = simp
-            cur["vocab_convert"] = conv
-        key_map = {"scale": "ui_scale", "format": "output_format",
+            store.set("output_simplified", simp)
+            store.set("vocab_convert", conv)
+        # Map frontend keys to settings keys; route through store so platform
+        # scoping (shared / platforms.<os>) is applied correctly.
+        # "scale" → ui_scale_percent (store mirrors ui_scale float on win32).
+        key_map = {"scale": "ui_scale_percent", "format": "output_format",
                    "mirror": "hf_mirror", "ffmpeg": "ffmpeg_path", "theme": "appearance",
                    "uiLang": "ui_lang", "vad": "vad_threshold", "chunkSecs": "chunk_secs"}
         for k, v in patch.items():
             if k in key_map:
-                cur[key_map[k]] = v
+                store.set(key_map[k], v)
         try:
-            f.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+            store.save()
         except Exception:
             pass
         # ── 即時套用副作用（與 app.py 的 _on_*_change 對齊）──────────────
@@ -1419,14 +1441,11 @@ class WebBackend:
         return self.get_endpoint()
 
     def _persist_setting(self, key: str, value):
-        f = Path(getattr(core, "SETTINGS_FILE", BASE_DIR / "settings.json"))
+        store = self._store
+        store.load()
+        store.set(key, value)
         try:
-            cur = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
-        except Exception:
-            cur = {}
-        cur[key] = value
-        try:
-            f.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+            store.save()
         except Exception:
             pass
 

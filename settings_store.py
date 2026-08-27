@@ -477,3 +477,40 @@ class SettingsStore:
     def derived_default(self, key: str):
         """Return the platform-derived default for *key*, or None."""
         return self._derived_defaults().get(key)
+
+
+# ---------------------------------------------------------------------------
+# Module-level helper: read ui_scale as a multiplier from a settings file path
+# ---------------------------------------------------------------------------
+
+def read_ui_scale_multiplier(path) -> float:
+    """Read ui_scale from *path* and return a float multiplier (e.g. 1.25 for 125%).
+
+    Resolution:
+    1. Canonical key ``ui_scale_percent`` (integer percent) → divide by 100.
+    2. Legacy key ``ui_scale``:
+       - value < 10 → treat as a float multiplier (return as-is).
+       - value >= 10 → treat as an integer percent → divide by 100.
+    3. Any error (file absent, corrupt JSON, missing key) → return 1.0.
+
+    This applies the same heuristic as ``_legacy_scale_to_percent`` but
+    returns a float multiplier rather than an integer percent, matching
+    what ``ctk.set_widget_scaling()`` and ``setting.py`` expect.
+    """
+    try:
+        p = Path(path)
+        if not p.exists():
+            return 1.0
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        # Canonical key takes priority
+        if "ui_scale_percent" in doc:
+            try:
+                return int(doc["ui_scale_percent"]) / 100.0
+            except (TypeError, ValueError):
+                pass
+        # Legacy key
+        if "ui_scale" in doc:
+            return _legacy_scale_to_percent(doc["ui_scale"]) / 100.0
+        return 1.0
+    except Exception:
+        return 1.0
