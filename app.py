@@ -688,13 +688,16 @@ class ASREngine:
         n_speakers: int | None = None,
         original_path: Path | None = None,
         out_format: str | None = None,
-    ) -> Path | None:
+        cancel_event=None,
+    ) -> "Path | list | None":
         """音檔 → 字幕檔，回傳輸出路徑（.srt 或 .txt）。
-        language   : 強制語系（如 "Chinese"），None 表示自動偵測
-        context    : 辨識提示（歌詞/關鍵字），放入 system message
-        diarize    : True 時用說話者分離取代 VAD，SRT 加說話者前綴
-        n_speakers : 指定說話者人數（None=自動偵測）
-        out_format : "srt" | "txt"；None 採全域設定（端點固定傳 "srt"）
+        language     : 強制語系（如 "Chinese"），None 表示自動偵測
+        context      : 辨識提示（歌詞/關鍵字），放入 system message
+        diarize      : True 時用說話者分離取代 VAD，SRT 加說話者前綴
+        n_speakers   : 指定說話者人數（None=自動偵測）
+        out_format   : "srt" | "txt"；None 採全域設定（端點固定傳 "srt"）
+        cancel_event : threading.Event；若已設定則在每個 chunk 邊界中止，
+                       回傳已轉錄的部分 segments（非破壞性；ticket 11）
         """
         from audio_io import load_audio_16k_mono
         audio, _ = load_audio_16k_mono(audio_path, SAMPLE_RATE)
@@ -739,6 +742,10 @@ class ASREngine:
         all_rich: list[dict] = []    # 與 all_subs 平行的字級結構（卡拉OK用）
         total = len(groups_spk)
         for i, (g0, g1, chunk, spk) in enumerate(groups_spk):
+            # ── Cooperative cancellation check (ticket 11) ────────────────
+            if cancel_event is not None and cancel_event.is_set():
+                # Non-destructive: return already-transcribed segments.
+                return list(all_subs)
             if progress_cb:
                 spk_info = f" [{spk}]" if spk else ""
                 progress_cb(i, total,

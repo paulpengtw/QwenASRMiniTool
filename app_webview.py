@@ -389,5 +389,124 @@ def main():
             os._exit(0)
 
 
+def linux_main(
+    srv: "WebViewServer",
+    *,
+    access_key: str = "",
+    base_dir: "Path | None" = None,
+    session_path: "Path | None" = None,
+) -> None:
+    """Non-win32 launcher entry point (ticket 11).
+
+    Installs SIGINT/SIGTERM handlers via ShutdownCoordinator.begin() with the
+    correct exit codes, wires POST /api/quit, and blocks until the server stops.
+
+    This function is called by the Ubuntu launcher (ticket 13).  The Windows
+    path (main()) is unchanged.
+
+    Parameters
+    ----------
+    srv:
+        A started WebViewServer instance bound to a loopback address.
+    access_key:
+        The session access key for POST /api/quit.
+    base_dir:
+        Base directory for the session file (used in delete_session step).
+    session_path:
+        Pre-resolved session file path (optional; falls back to session_file
+        module if omitted).
+    """
+    # Windows path is guarded by the caller; double-check.
+    if sys.platform == "win32":
+        return
+
+    from platform_seams import guard_children
+    from shutdown import ShutdownCoordinator
+
+    children = guard_children()
+
+    # Build shutdown steps for the Ubuntu path.
+    def _broadcast():
+        srv.hub.publish("stopping", {"reason": "user-quit"})
+
+    def _stop_accepting():
+        srv._accepting_work = False
+
+    def _cancel_registry_jobs():
+        # Cancel all active registry jobs (if backend exposes a registry).
+        try:
+            reg = getattr(srv.backend, "job_registry", None)
+            if reg is not None:
+                snap = reg.snapshot()
+                for job in snap.get("jobs", []):
+                    jid = job.get("job_id")
+                    state = job.get("state", "")
+                    if state in ("queued", "running", "capturing") and jid:
+                        try:
+                            reg.cancel(jid)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    def _terminate_children():
+        children.terminate_all()
+
+    def _flush_settings():
+        try:
+            store = getattr(srv.backend, "settings_store", None)
+            if store is not None:
+                store.save()
+        except Exception:
+            pass
+
+    def _close_sse():
+        try:
+            srv.hub._subs.clear()
+        except Exception:
+            pass
+
+    def _stop_server():
+        srv.stop()
+
+    def _delete_session():
+        # Linux only: delete session file on clean exit.
+        if sys.platform != "win32" and session_path is not None:
+            try:
+                session_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        elif sys.platform != "win32" and base_dir is not None:
+            try:
+                import session_file as _sf
+                _sf.delete_session(base_dir)
+            except Exception:
+                pass
+
+    steps = [
+        _broadcast,
+        _stop_accepting,
+        _cancel_registry_jobs,
+        _terminate_children,
+        _flush_settings,
+        _close_sse,
+        _stop_server,
+        _delete_session,
+    ]
+
+    coord = ShutdownCoordinator(steps=steps)
+
+    # Wire the quit endpoint.
+    srv.shutdown_coordinator = coord
+    srv.quit_access_key = access_key
+
+    # Install SIGINT (130) / SIGTERM (143) handlers.
+    coord.install_signal_handlers()
+
+    # Block until the server stops.
+    if srv._thread is not None:
+        srv._thread.join()
+
+
 if __name__ == "__main__":
     main()
