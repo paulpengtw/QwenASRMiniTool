@@ -96,7 +96,15 @@ class ChatLLMAligner:
 
         實際對齊在 align_chunk() 以 subprocess 完成；此處僅以 `--show`
         確認模型確為 ForcedAligner，避免日後拿到錯誤模型。
+
+        非 win32 平台：chatllm main.exe 僅 Windows；直接回傳 False，
+        不搜尋 main.exe。（ticket 07）
         """
+        import sys as _sys
+        from alignment_policy import alignment_capability
+        if alignment_capability(platform=_sys.platform)["state"] == "platform_unsupported":
+            return False
+
         def _s(msg: str):
             if cb:
                 cb(msg)
