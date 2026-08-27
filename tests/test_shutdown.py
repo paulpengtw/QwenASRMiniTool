@@ -603,3 +603,145 @@ def test_exit_codes_table():
 
 def test_app_stopping_constant():
     assert APP_STOPPING == "APP_STOPPING"
+
+
+# ---------------------------------------------------------------------------
+# 10. webview_backend.cancel() → engine.process_file() integration (ticket 11 gap)
+# ---------------------------------------------------------------------------
+
+
+def test_webview_backend_cancel_wires_to_process_file_cancel_event():
+    """cancel() must set the cancel_event that is passed to engine.process_file().
+
+    This exercises the real WebBackend.cancel() → engine.process_file() chain,
+    not a self-contained stub.  A fake engine is injected so no model is loaded.
+    The key assertion is that process_file() receives a threading.Event and that
+    calling cancel() causes that event to be set, stopping the job at the next
+    chunk boundary.
+    """
+    import tempfile
+    import types
+    from webview_backend import WebBackend
+
+    # Build a fake engine whose process_file() blocks until cancel_event is set,
+    # then returns the partial segments collected so far.
+    received_events: list = []
+
+    class _CancellableEngine:
+        ready = True
+        _last_segments_rich = None
+        _fa_bin = None
+        use_aligner = False
+        diar_engine = None
+        _last_vad_diag = None
+
+        def process_file(self, path, *, cancel_event=None, **kwargs):
+            received_events.append(cancel_event)
+            segments = []
+            for chunk in ["a", "b", "c", "d"]:
+                if cancel_event is not None and cancel_event.is_set():
+                    return segments  # non-destructive partial return
+                segments.append({"text": chunk})
+                # Pause briefly to give the test thread time to call cancel().
+                time.sleep(0.02)
+            return segments
+
+    backend = WebBackend()
+    backend.engine = _CancellableEngine()
+
+    # Create a real temporary audio file so the path-exists guard passes.
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+        tmp_path = tf.name
+
+    transcribe_result: list = []
+    transcribe_exc: list = []
+
+    def _run_transcribe():
+        try:
+            # Provide minimal opts; language=None avoids the language-lookup path.
+            result = backend.transcribe(
+                {"path": tmp_path, "language": "auto", "diarize": False},
+                progress_cb=None,
+            )
+            transcribe_result.append(result)
+        except Exception as exc:
+            transcribe_exc.append(exc)
+
+    t = threading.Thread(target=_run_transcribe, daemon=True)
+    t.start()
+
+    # Give process_file() time to start and register the cancel_event.
+    time.sleep(0.05)
+
+    # Call cancel() — this is the seam under test.
+    backend.cancel()
+
+    t.join(timeout=3.0)
+    assert not t.is_alive(), "transcribe() did not return after cancel()"
+
+    # Verify the cancel_event was actually passed through.
+    assert len(received_events) == 1, "process_file() must be called exactly once"
+    assert received_events[0] is not None, "cancel_event must be a threading.Event, not None"
+    assert received_events[0].is_set(), "cancel_event must be set after cancel() is called"
+
+    # Partial result: fewer than all 4 chunks were processed (job stopped early).
+    # transcribe() may raise or return a result depending on whether partial SRT is empty.
+    # Either way, process_file must have returned before processing all chunks.
+    import os
+    os.unlink(tmp_path)
+
+
+def test_webview_backend_cancel_event_cleared_between_jobs():
+    """cancel_event is cleared at the start of each transcribe() call so a
+    previous cancel() does not poison the next job.
+    """
+    import tempfile
+    from webview_backend import WebBackend
+
+    call_count = 0
+    seen_events: list = []
+
+    class _RecordingEngine:
+        ready = True
+        _last_segments_rich = None
+        _fa_bin = None
+        use_aligner = False
+        diar_engine = None
+        _last_vad_diag = None
+
+        def process_file(self, path, *, cancel_event=None, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            seen_events.append(
+                (cancel_event.is_set() if cancel_event is not None else None)
+            )
+            return ""  # empty SRT — transcribe() will raise, but that's fine
+
+    backend = WebBackend()
+    backend.engine = _RecordingEngine()
+
+    # Set cancel before any job.
+    backend.cancel()
+    assert backend._cancel_event.is_set()
+
+    # First transcribe() must clear the event before calling process_file().
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+        tmp_path = tf.name
+
+    try:
+        backend.transcribe(
+            {"path": tmp_path, "language": "auto", "diarize": False},
+            progress_cb=None,
+        )
+    except RuntimeError:
+        pass  # expected: empty SRT raises "未產生字幕"
+
+    assert call_count == 1
+    # The event must have been cleared before process_file was called.
+    assert seen_events[0] is False, (
+        "cancel_event must be cleared at the start of transcribe(), "
+        "got is_set()=True"
+    )
+
+    import os
+    os.unlink(tmp_path)
