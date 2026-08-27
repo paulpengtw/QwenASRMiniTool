@@ -652,6 +652,29 @@
   // ════════════════════════════════════════════════════════
   let _modelOpt = null;     // 最近一次 getModelOptions 結果
   let _curCore = null;      // 目前選中的核心標籤
+  let _capSnap = null;      // 最近一次 getCapabilities 結果
+
+  // Map from model-catalog backend IDs ("openvino","crispasr","chatllm","cuda")
+  // to the snapshot's backends dict keys ("openvino_cpu","crispasr","chatllm_vulkan","cuda_pytorch")
+  const _CATALOG_TO_SNAP_KEY = {
+    openvino: "openvino_cpu",
+    crispasr: "crispasr",
+    chatllm:  "chatllm_vulkan",
+    cuda:     "cuda_pytorch",
+  };
+
+  /**
+   * Check whether a model-catalog backend ID is platform_unsupported
+   * in the current capabilities snapshot.
+   * Falls back to false (show everything) when no snapshot is loaded.
+   */
+  function _isBackendUnsupported(catalogBackend) {
+    if (!_capSnap || !_capSnap.backends) return false;
+    const snapKey = _CATALOG_TO_SNAP_KEY[catalogBackend];
+    if (!snapKey) return false;
+    const entry = _capSnap.backends[snapKey];
+    return entry && entry.state === "platform_unsupported";
+  }
 
   // ── 系統自檢：每核心 × 每能力，顯示 Green/Yellow/Red ──────────────
   async function renderHealth() {
@@ -687,10 +710,13 @@
     renderHealth();
     // 核心卡 + 模型下拉
     try {
+      // Fetch capabilities snapshot for platform-aware filtering
+      try { _capSnap = await API.getCapabilities(); } catch (_e) { _capSnap = null; }
       _modelOpt = await API.getModelOptions();
       _curCore = _modelOpt.current.core;
       renderCoreCards();
       populateModels(_curCore, _modelOpt.current.model);
+      renderUnsupportedBackendsSection();
       // 已記住的選擇 vs 實際載入的架構不同 → 提示重啟
       const curArch = selectedArch();
       if (_modelOpt.activeArch && curArch && _modelOpt.activeArch !== curArch) {
@@ -725,27 +751,92 @@
   function renderCoreCards() {
     const host = $("#core-cards"); host.innerHTML = "";
     (_modelOpt.cores || []).forEach(core => {
+      // A core is shown if ANY of its models is not platform_unsupported
+      const visibleModels = (core.models || []).filter(m => !_isBackendUnsupported(m.backend));
+      if (visibleModels.length === 0) return;   // all models are platform_unsupported → skip card
       const card = document.createElement("label");
       card.className = "radio-card" + (core.label === _curCore ? " sel" : "");
       card.dataset.core = core.label;
       card.innerHTML = `<span class="rd"></span><div class="info">
         <div class="t">${escapeHtml(core.label)}</div>
-        <div class="d">${escapeHtml(T("model.nModels", `${core.models.length} 種模型可選`, { n: core.models.length }))}</div></div>`;
+        <div class="d">${escapeHtml(T("model.nModels", `${visibleModels.length} 種模型可選`, { n: visibleModels.length }))}</div></div>`;
       host.appendChild(card);
     });
   }
   function populateModels(coreLabel, modelLabel) {
     const core = coreObj(coreLabel); if (!core) return;
     const sel = $("#model-select"); sel.innerHTML = "";
-    core.models.forEach(m => {
+    // Filter out platform_unsupported models from the selector
+    const visibleModels = (core.models || []).filter(m => !_isBackendUnsupported(m.backend));
+    visibleModels.forEach(m => {
       const o = document.createElement("option");
       o.value = m.label; o.textContent = m.label; o.dataset.arch = m.arch;
       o.dataset.note = m.note || "";
       if (m.label === modelLabel) o.selected = true;
       sel.appendChild(o);
     });
-    if (!core.models.some(m => m.label === modelLabel) && core.models[0]) sel.value = core.models[0].label;
+    if (!visibleModels.some(m => m.label === modelLabel) && visibleModels[0]) sel.value = visibleModels[0].label;
     updateArch();
+  }
+
+  /**
+   * Render (or hide) the collapsed "Not supported on Ubuntu / Ubuntu 不支援" section
+   * based on the capabilities snapshot.  The section is created lazily in the DOM.
+   */
+  function renderUnsupportedBackendsSection() {
+    // Find or create the container immediately after #model-msg
+    let section = $("#cap-unsupported-section");
+    if (!section) {
+      section = document.createElement("details");
+      section.id = "cap-unsupported-section";
+      section.style.cssText = "margin-top:14px;font-size:13px;color:var(--ink-2)";
+      const summary = document.createElement("summary");
+      summary.style.cssText = "cursor:pointer;user-select:none;color:var(--ink-2)";
+      summary.textContent = "Not supported on Ubuntu / Ubuntu 不支援";
+      section.appendChild(summary);
+      // Insert after #model-msg
+      const modelMsg = $("#model-msg");
+      if (modelMsg && modelMsg.parentNode) {
+        modelMsg.parentNode.insertBefore(section, modelMsg.nextSibling);
+      }
+    }
+
+    // Collect platform_unsupported backends from the snapshot
+    const unsupportedItems = [];
+    if (_capSnap && _capSnap.backends) {
+      const CV = window.CapabilityView;
+      if (CV) {
+        const { unsupported } = CV.partitionBackendEntries(_capSnap.backends);
+        unsupported.forEach(item => unsupportedItems.push(item));
+      }
+    }
+
+    if (unsupportedItems.length === 0) {
+      section.hidden = true;
+      return;
+    }
+    section.hidden = false;
+    // Clear old content (keep the <summary>)
+    const summary = section.querySelector("summary");
+    section.innerHTML = "";
+    if (summary) section.appendChild(summary);
+
+    const list = document.createElement("ul");
+    list.style.cssText = "margin:6px 0 0 18px;padding:0;list-style:disc";
+    unsupportedItems.forEach(item => {
+      const li = document.createElement("li");
+      li.style.cssText = "margin:3px 0";
+      // Show human-readable backend label
+      const BACKEND_LABELS = {
+        crispasr: "CRISPASR/Vulkan",
+        chatllm_vulkan: "chatllm/Vulkan",
+        cuda_pytorch: "CUDA/PyTorch",
+      };
+      const label = BACKEND_LABELS[item.key] || item.key;
+      li.textContent = label;
+      list.appendChild(li);
+    });
+    section.appendChild(list);
   }
   function selectedArch() { const o = $("#model-select").selectedOptions[0]; return o ? o.dataset.arch : ""; }
   function updateArch() {

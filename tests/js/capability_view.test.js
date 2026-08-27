@@ -16,6 +16,7 @@ const {
   mapCapabilityToI18nKey,
   renderCode,
   resolveDisplayLang,
+  partitionBackendEntries,
 } = require("../../webview/js/capability_view.js");
 
 // ---------------------------------------------------------------------------
@@ -201,4 +202,75 @@ test("renderCode: missing param leaves placeholder", () => {
   // Should NOT throw; placeholder left as-is
   assert.ok(typeof result === "string");
   assert.ok(result.includes("{model}"), `Expected placeholder in: ${result}`);
+});
+
+// ---------------------------------------------------------------------------
+// partitionBackendEntries — splits shown vs. unsupported backends
+// ---------------------------------------------------------------------------
+
+test("partitionBackendEntries: ready entry goes to shown", () => {
+  const entries = { openvino_cpu: { state: "ready" } };
+  const { shown, unsupported } = partitionBackendEntries(entries);
+  assert.equal(shown.length, 1);
+  assert.equal(shown[0].key, "openvino_cpu");
+  assert.equal(unsupported.length, 0);
+});
+
+test("partitionBackendEntries: setup_required goes to shown", () => {
+  const entries = { crispasr: { state: "setup_required" } };
+  const { shown, unsupported } = partitionBackendEntries(entries);
+  assert.equal(shown.length, 1);
+  assert.equal(unsupported.length, 0);
+});
+
+test("partitionBackendEntries: machine_unavailable goes to shown (disabled)", () => {
+  const entries = { cuda: { state: "machine_unavailable" } };
+  const { shown, unsupported } = partitionBackendEntries(entries);
+  assert.equal(shown.length, 1);
+  assert.equal(shown[0].disabled, true);
+  assert.equal(unsupported.length, 0);
+});
+
+test("partitionBackendEntries: platform_unsupported goes to unsupported list", () => {
+  const entries = { crispasr: { state: "platform_unsupported" } };
+  const { shown, unsupported } = partitionBackendEntries(entries);
+  assert.equal(shown.length, 0);
+  assert.equal(unsupported.length, 1);
+  assert.equal(unsupported[0].key, "crispasr");
+});
+
+test("partitionBackendEntries: mixed entries split correctly", () => {
+  const entries = {
+    openvino_cpu: { state: "ready" },
+    crispasr: { state: "platform_unsupported" },
+    cuda: { state: "machine_unavailable" },
+    chatllm_vulkan: { state: "platform_unsupported" },
+  };
+  const { shown, unsupported } = partitionBackendEntries(entries);
+  assert.equal(shown.length, 2);
+  assert.equal(unsupported.length, 2);
+  const shownKeys = shown.map(e => e.key);
+  assert.ok(shownKeys.includes("openvino_cpu"));
+  assert.ok(shownKeys.includes("cuda"));
+  const unsupKeys = unsupported.map(e => e.key);
+  assert.ok(unsupKeys.includes("crispasr"));
+  assert.ok(unsupKeys.includes("chatllm_vulkan"));
+});
+
+test("partitionBackendEntries: null or empty input returns empty lists", () => {
+  const { shown, unsupported } = partitionBackendEntries(null);
+  assert.equal(shown.length, 0);
+  assert.equal(unsupported.length, 0);
+  const r2 = partitionBackendEntries({});
+  assert.equal(r2.shown.length, 0);
+  assert.equal(r2.unsupported.length, 0);
+});
+
+test("partitionBackendEntries: each shown entry has key, state, disabled", () => {
+  const entries = { openvino_cpu: { state: "ready", reason: null } };
+  const { shown } = partitionBackendEntries(entries);
+  assert.ok("key" in shown[0]);
+  assert.ok("state" in shown[0]);
+  assert.ok("disabled" in shown[0]);
+  assert.equal(shown[0].disabled, false);
 });

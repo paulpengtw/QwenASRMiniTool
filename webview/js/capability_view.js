@@ -119,6 +119,33 @@ function renderCode(code, params, codesTable, lang) {
   });
 }
 
+/**
+ * Partition a backends map from the capabilities snapshot into two lists:
+ *   shown      — entries that appear in the main selector (ready/setup_required/machine_unavailable)
+ *   unsupported — platform_unsupported entries for the collapsed informational section
+ *
+ * Each item in both lists has: {key, state, entry, disabled}
+ * (disabled is true only for machine_unavailable entries).
+ *
+ * @param {Object|null} backends  e.g. snapshot.backends or a sub-object keyed by backend id
+ * @returns {{ shown: Array, unsupported: Array }}
+ */
+function partitionBackendEntries(backends) {
+  const shown = [];
+  const unsupported = [];
+  if (!backends || typeof backends !== "object") return { shown, unsupported };
+  for (const [key, entry] of Object.entries(backends)) {
+    const state = controlStateForEntry(entry);
+    const item = { key, state, entry: entry || {}, disabled: state === "machine_unavailable" };
+    if (state === "platform_unsupported") {
+      unsupported.push(item);
+    } else {
+      shown.push(item);
+    }
+  }
+  return { shown, unsupported };
+}
+
 // CommonJS export for node --test
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
@@ -128,5 +155,19 @@ if (typeof module !== "undefined" && module.exports) {
     mapCapabilityToI18nKey,
     renderCode,
     resolveDisplayLang,
+    partitionBackendEntries,
+  };
+}
+
+// Browser global — exposes CapabilityView for i18n.js and app.js
+if (typeof window !== "undefined") {
+  window.CapabilityView = {
+    controlStateForEntry,
+    shouldShowEntry,
+    isEntryDisabled,
+    mapCapabilityToI18nKey,
+    renderCode,
+    resolveDisplayLang,
+    partitionBackendEntries,
   };
 }
