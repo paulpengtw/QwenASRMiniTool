@@ -105,6 +105,14 @@ class WebViewServer:
         self._thread: threading.Thread | None = None
         self._want_port = port
         self.port = port
+        # Shutdown coordinator (ticket 11): set by the launcher on non-win32.
+        # When set, POST /api/quit is enabled and requires the access key.
+        self.shutdown_coordinator = None
+        # Access key for POST /api/quit (same as the session access key).
+        # Set by the launcher; None means the endpoint is not enabled.
+        self.quit_access_key: str | None = None
+        # Flag: False -> refuse new work with 503 APP_STOPPING (ticket 11).
+        self._accepting_work: bool = True
 
     def start(self):
         if self._httpd:
@@ -227,6 +235,26 @@ class WebViewServer:
                         return self._transcribe()
                     if path == "/api/cancel":
                         return self._json({"ok": server.backend.cancel()})
+                    if path == "/api/quit":
+                        # Requires access key (ticket 11).
+                        import secrets as _sec
+                        key = server.quit_access_key
+                        if not key:
+                            return self._err(403, "quit endpoint not configured")
+                        auth = self.headers.get("Authorization", "")
+                        got = auth[7:].strip() if auth.startswith("Bearer ") else ""
+                        if not got or not _sec.compare_digest(got, key):
+                            return self._err(401, "invalid access key")
+                        # Respond 200 then trigger shutdown.
+                        self._json({"ok": True})
+                        coord = server.shutdown_coordinator
+                        if coord is not None:
+                            threading.Thread(
+                                target=coord.begin,
+                                args=("user-quit",),
+                                daemon=True,
+                            ).start()
+                        return
                     if path == "/api/open-output":
                         return self._json({"ok": server.backend.open_output_dir()})
                     if path == "/api/check-update":
