@@ -1,0 +1,215 @@
+"""
+tests/test_packaging.py
+
+Ticket 01 — uv packaging baseline.
+
+Tests:
+1. pyproject.toml parses with tomllib.
+2. Required direct dependencies are declared.
+3. Required extras exist (qr, windows, gpu, dev).
+4. requirements.txt is in sync with uv export (skipped when uv not on PATH).
+"""
+import difflib
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import pytest
+
+# tomllib is in the standard library for Python >= 3.11
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib  # type: ignore[no-redef]
+
+ROOT = Path(__file__).resolve().parents[1]
+PYPROJECT = ROOT / "pyproject.toml"
+REQUIREMENTS = ROOT / "requirements.txt"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def load_pyproject():
+    with PYPROJECT.open("rb") as f:
+        return tomllib.load(f)
+
+
+# ---------------------------------------------------------------------------
+# 1. pyproject.toml parses
+# ---------------------------------------------------------------------------
+
+def test_pyproject_parses():
+    data = load_pyproject()
+    assert isinstance(data, dict), "pyproject.toml must parse to a dict"
+
+
+# ---------------------------------------------------------------------------
+# 2. Project metadata
+# ---------------------------------------------------------------------------
+
+def test_project_name():
+    data = load_pyproject()
+    assert data["project"]["name"] == "qwen-asr-mini-tool"
+
+
+def test_requires_python():
+    data = load_pyproject()
+    spec = data["project"]["requires-python"]
+    # Must be ">=3.11" or compatible — just check the lower bound string
+    assert "3.11" in spec or "3.12" in spec, (
+        f"requires-python {spec!r} does not mention 3.11 or 3.12"
+    )
+
+
+def test_required_direct_deps_declared():
+    """All direct dependencies listed by ticket 01 must appear in [project.dependencies]."""
+    data = load_pyproject()
+    deps_raw = data["project"]["dependencies"]
+
+    def norm(s: str) -> str:
+        # Take the package name: everything before any version/marker character
+        name = s.split(">")[0].split("<")[0].split("=")[0].split("!")[0].split(";")[0].strip()
+        return name.lower().replace("_", "-")
+
+    dep_names = {norm(d) for d in deps_raw}
+
+    required = {
+        "customtkinter",
+        "openvino",
+        "onnxruntime",
+        "numpy",
+        "librosa",
+        "sounddevice",
+        # direct declarations that were missing/transitive per ticket 01:
+        "soundfile",
+        "soxr",
+        "scipy",
+        "tokenizers",
+        "kaldi-native-fbank",
+        "certifi",
+        # Chinese conversion
+        "opencc-python-reimplemented",
+        # model download helpers
+        "huggingface-hub",
+        "requests",
+        "tqdm",
+    }
+
+    missing = required - dep_names
+    assert not missing, (
+        f"These required direct deps are missing from pyproject.toml: {sorted(missing)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 3. Optional extras
+# ---------------------------------------------------------------------------
+
+def test_extras_exist():
+    data = load_pyproject()
+    extras = data["project"].get("optional-dependencies", {})
+    for name in ("qr", "windows", "gpu", "dev"):
+        assert name in extras, (
+            f"Extra {name!r} is missing from [project.optional-dependencies]"
+        )
+
+
+def test_qr_extra_contains_segno():
+    data = load_pyproject()
+    extras = data["project"]["optional-dependencies"]
+    names = [
+        d.split(">")[0].split("<")[0].split("=")[0].strip().lower()
+        for d in extras["qr"]
+    ]
+    assert "segno" in names, "qr extra must include segno"
+
+
+def test_windows_extra_contains_pywebview():
+    data = load_pyproject()
+    extras = data["project"]["optional-dependencies"]
+    names = [
+        d.split(">")[0].split("<")[0].split("=")[0].strip().lower()
+        for d in extras["windows"]
+    ]
+    assert "pywebview" in names, "windows extra must include pywebview"
+
+
+def test_dev_extra_contains_pytest():
+    data = load_pyproject()
+    extras = data["project"]["optional-dependencies"]
+    names = [
+        d.split(">")[0].split("<")[0].split("=")[0].strip().lower()
+        for d in extras["dev"]
+    ]
+    assert "pytest" in names, "dev extra must include pytest"
+
+
+# ---------------------------------------------------------------------------
+# 4. requirements.txt sync check
+# ---------------------------------------------------------------------------
+
+# Resolve uv path: prefer PATH, fall back to the known install location.
+UV_PATH = shutil.which("uv") or (
+    "/home/claude/.local/bin/uv"
+    if Path("/home/claude/.local/bin/uv").exists()
+    else None
+)
+
+_GENERATED_HEADER = (
+    "# GENERATED by uv export - do not hand-edit; see scripts/check-requirements-sync.sh\n"
+)
+
+
+@pytest.mark.skipif(UV_PATH is None, reason="uv not on PATH — skipping sync check")
+def test_requirements_sync():
+    """requirements.txt must match a fresh uv export (modulo the GENERATED header)."""
+    assert REQUIREMENTS.exists(), "requirements.txt must exist"
+
+    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+
+    try:
+        result = subprocess.run(
+            [
+                UV_PATH,
+                "export",
+                "--format", "requirements-txt",
+                "--no-hashes",
+                "--no-emit-project",
+                "--no-dev",
+                "--no-header",
+                "-o", str(tmp_path),
+                "--project", str(ROOT),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (
+            f"uv export failed:\n{result.stderr}"
+        )
+
+        # Prepend the GENERATED header (same as what check-requirements-sync.sh does)
+        fresh_text = _GENERATED_HEADER + tmp_path.read_text()
+        committed_text = REQUIREMENTS.read_text()
+
+        if committed_text != fresh_text:
+            diff = "".join(difflib.unified_diff(
+                committed_text.splitlines(keepends=True),
+                fresh_text.splitlines(keepends=True),
+                fromfile="requirements.txt (committed)",
+                tofile="requirements.txt (uv export)",
+                n=3,
+            ))
+            pytest.fail(
+                "requirements.txt is out of sync with uv export.\n"
+                "Regenerate with:\n"
+                "  uv export --format requirements-txt --no-hashes --no-emit-project "
+                "--no-dev --no-header -o requirements.txt\n"
+                "  Then prepend the GENERATED header and commit.\n\n"
+                f"Diff:\n{diff}"
+            )
+    finally:
+        tmp_path.unlink(missing_ok=True)
