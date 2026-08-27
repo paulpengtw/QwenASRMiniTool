@@ -66,6 +66,7 @@ except Exception:
 from subtitle_lines import (
     MAX_CHARS, _ZH_CLAUSE_END, _EN_SENT_END,
     _srt_ts, _merge_orphan_lines, _ts_chatllm_to_subtitle_lines,
+    reconcile_alignment,
     split_to_lines as _split_to_lines, assign_ts as _assign_ts,
     write_transcript,
 )
@@ -790,6 +791,7 @@ class ASREngine:
                     _sf.write(_tmp_wav, chunk, SAMPLE_RATE, subtype="PCM_16")
                     align_lang = language if (language and language != "自動偵測") else "Chinese"
                     ts_items = self._align_chunk(_tmp_wav, raw_text, align_lang)
+                    ts_items = reconcile_alignment(ts_items, raw_text, 0.0, g1 - g0)
                     if ts_items:
                         subs = _ts_chatllm_to_subtitle_lines(
                             ts_items, raw_text, g0, spk,

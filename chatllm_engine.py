@@ -25,7 +25,11 @@ from pathlib import Path
 
 import numpy as np
 
-from subtitle_lines import split_to_lines as _split_to_lines, assign_ts as _assign_ts
+from subtitle_lines import (
+    split_to_lines as _split_to_lines,
+    assign_ts as _assign_ts,
+    reconcile_alignment,
+)
 
 # ── 輸出語系旗標（由 app.py / app-gpu.py 切換時同步設定）──────────────
 # True = 直接輸出模型原始簡體；False = 經 OpenCC 轉為繁體
@@ -1006,6 +1010,7 @@ class ChatLLMASREngine:
                                       if (language and language != "自動偵測")
                                       else "Chinese")
                         ts_items = self._align_chunk(tmp_path, raw_text, align_lang)
+                        ts_items = reconcile_alignment(ts_items, raw_text, 0.0, g1 - g0)
                         if ts_items:
                             subs = _ts_fn(
                                 ts_items, raw_text, g0, spk,

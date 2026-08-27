@@ -6,6 +6,8 @@
 
 公開符號：
     MAX_CHARS, MAX_WORDS, _ZH_CLAUSE_END, _EN_SENT_END   斷句常數
+    text_units(raw_text)                         FA/karaoke 對齊單位
+    reconcile_alignment(...)                    補齊不完整 FA 時間軸
     split_to_lines(text)                       原文 → 字幕行
     assign_ts(lines, g0, g1)                   字幕行 → 比例時間軸
     _srt_ts(s)                                秒 → SRT 時間戳
@@ -13,6 +15,8 @@
     _ts_chatllm_to_subtitle_lines(...)        字級 list → [(start,end,text,spk)]
 """
 from __future__ import annotations
+
+import difflib
 
 # ── 斷句常數（與舊 app.py 行為一致）──────────────────────────────────
 MAX_CHARS      = 20
@@ -22,6 +26,122 @@ GAP_SEC        = 0.08
 _ZH_CLAUSE_END = frozenset('，。？！；：…—、·')
 _EN_SENT_END   = frozenset('.,!?;')
 _SPLIT_PUNCT   = frozenset('，。？！；：…—、.,!?;:')
+_ALIGNMENT_PUNCT = _ZH_CLAUSE_END | _EN_SENT_END | frozenset({':'})
+
+
+def text_units(raw_text: str) -> list[str]:
+    """Return the text units used by forced-alignment reconciliation."""
+    units: list[str] = []
+    i = 0
+
+    def _is_ascii_alnum(char: str) -> bool:
+        return char.isascii() and (char.isalpha() or char.isdigit())
+
+    while i < len(raw_text):
+        char = raw_text[i]
+        if _is_ascii_alnum(char):
+            j = i + 1
+            while j < len(raw_text):
+                if _is_ascii_alnum(raw_text[j]):
+                    j += 1
+                elif (raw_text[j] == "'" and j > i and j + 1 < len(raw_text)
+                      and _is_ascii_alnum(raw_text[j - 1])
+                      and _is_ascii_alnum(raw_text[j + 1])):
+                    j += 1
+                else:
+                    break
+            units.append(raw_text[i:j])
+            i = j
+            continue
+        if not char.isspace() and char not in _ALIGNMENT_PUNCT:
+            units.append(char)
+        i += 1
+    return units
+
+
+def reconcile_alignment(
+    ts_items,
+    raw_text: str,
+    g0: float = 0.0,
+    g1: float | None = None,
+) -> list[tuple[str, float, float]]:
+    """Reconcile an incomplete forced-alignment result with ``raw_text``."""
+    units = text_units(raw_text)
+    if not ts_items or not units:
+        return []
+
+    expanded_items: list[tuple[str, float, float]] = []
+    for item in ts_items:
+        item_units = text_units(str(item[0]))
+        if not item_units:
+            continue
+        start = float(item[1])
+        end = float(item[2])
+        duration = (end - start) / len(item_units)
+        expanded_items.extend(
+            (unit, start + duration * offset,
+             start + duration * (offset + 1))
+            for offset, unit in enumerate(item_units)
+        )
+    if not expanded_items:
+        return []
+
+    def _normalise(value: str) -> str:
+        return str(value).strip("".join(_ALIGNMENT_PUNCT)).casefold()
+
+    unit_keys = [unit.casefold() for unit in units]
+    words = [_normalise(item[0]) for item in expanded_items]
+    matcher = difflib.SequenceMatcher(None, unit_keys, words, autojunk=False)
+    matched = {
+        unit_index + offset: expanded_items[word_index + offset]
+        for unit_index, word_index, size in matcher.get_matching_blocks()
+        for offset in range(size)
+    }
+    if not matched:
+        return []
+
+    result: list[tuple[str, float, float]] = []
+
+    def _append(unit: str, start: float, end: float) -> None:
+        start = float(start)
+        end = float(end)
+        if result:
+            start = max(start, result[-1][2])
+        end = max(start, end)
+        result.append((unit, start, end))
+
+    for unit_index, unit in enumerate(units):
+        item = matched.get(unit_index)
+        if item is not None:
+            _append(unit, item[1], item[2])
+            continue
+        left = max((index for index in matched if index < unit_index), default=None)
+        right = min((index for index in matched if index > unit_index), default=None)
+        if left is None and right is not None:
+            right_start = float(matched[right][1])
+            gap = (right_start - float(g0)) / right
+            _append(unit, float(g0) + gap * unit_index,
+                    float(g0) + gap * (unit_index + 1))
+            continue
+        if left is None or right is None:
+            if left is None:
+                continue
+            left_end = float(matched[left][2])
+            count = len(units) - left - 1
+            right_end = (float(g1) if g1 is not None
+                         else left_end + 0.3 * count)
+            gap = (right_end - left_end) / count
+            offset = unit_index - left
+            _append(unit, left_end + gap * (offset - 1),
+                    left_end + gap * offset)
+            continue
+        left_end = float(matched[left][2])
+        right_start = float(matched[right][1])
+        gap = (right_start - left_end) / (right - left - 1)
+        offset = unit_index - left
+        _append(unit, left_end + gap * (offset - 1),
+                left_end + gap * offset)
+    return result
 
 
 def split_to_lines(text: str) -> list[str]:
