@@ -193,6 +193,31 @@ build_webview.bat              # 產出 dist2\QwenASR-WebView\QwenASR-WebView.ex
 
 ---
 
+## Ubuntu Source Install
+
+Ubuntu 24.04 x86-64 is supported as a source install.  The full install guide
+and manual checklist are in the `docs/` folder:
+
+- **[docs/ubuntu.md](docs/ubuntu.md)** — step-by-step install guide: apt
+  prerequisites, uv, `uv sync`, first launch, model download, FFmpeg, optional
+  cloudflared, quitting, and a troubleshooting table keyed by capability code.
+- **[docs/ubuntu-clean-vm-checklist.md](docs/ubuntu-clean-vm-checklist.md)** —
+  the committed clean-VM manual walk: apt + uv, `uv sync`, first launch with no
+  models, 0.6B download, audio transcription, video conversion, microphone
+  recording, endpoint exposure + second-machine call, quit, and orphan process
+  check (`pgrep ffmpeg && pgrep cloudflared`).
+
+Quick start:
+
+```bash
+sudo apt install -y ca-certificates ffmpeg xdg-utils python3-tk
+curl -LsSf https://astral.sh/uv/install.sh | sh && source "$HOME/.local/bin/env"
+git clone https://github.com/paulpengtw/QwenASRMiniTool.git && cd QwenASRMiniTool
+uv sync && ./run.sh
+```
+
+---
+
 ## 系統需求
 
 | 項目 | CPU 模式（OpenVINO）| GPU 模式（CrispASR / Vulkan）|

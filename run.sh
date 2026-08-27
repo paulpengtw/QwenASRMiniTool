@@ -56,5 +56,10 @@ fi
 # ---------------------------------------------------------------------------
 # 4. Launch the application (exec replaces this shell — no zombie parent)
 # 啟動應用程式（exec 取代本 shell，避免殭屍程序）
+#
+# On Linux: ubuntu_launcher.py handles browser lifecycle (ticket 13).
+# On Windows: app_webview.py handles the WebView2/Edge path (unchanged).
+# Linux 上：由 ubuntu_launcher.py 處理瀏覽器生命週期（ticket 13）。
+# Windows 上：由 app_webview.py 處理 WebView2/Edge 路徑（不變）。
 # ---------------------------------------------------------------------------
-exec uv run python "${SCRIPT_DIR}/app_webview.py"
+exec uv run python "${SCRIPT_DIR}/ubuntu_launcher.py"
