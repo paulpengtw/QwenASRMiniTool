@@ -152,7 +152,7 @@ class WebBackend:
         self._loaded = False
         self._load_err = None
         self._loading = False
-        self._cancel = False
+        self._cancel_event = threading.Event()  # ticket 11: chunk-boundary cancel
         self._server = None              # api_server.TranscribeServer（LAN 端點）
         self._tunnel = None              # cf_tunnel.CloudflareTunnel（對外臨時網址，延遲建立）
         self._on_event = on_event
@@ -542,7 +542,7 @@ class WebBackend:
         path = opts.get("path")
         if not path or not Path(path).exists():
             raise RuntimeError("找不到音訊檔。")
-        self._cancel = False
+        self._cancel_event.clear()  # ticket 11: reset cancel event before each job
 
         def _cb(i, total, msg):
             if progress_cb:
@@ -623,6 +623,7 @@ class WebBackend:
                     n_speakers=n_speakers,
                     original_path=out_ref,
                     out_format="srt",
+                    cancel_event=self._cancel_event,  # ticket 11: chunk-boundary cancel
                 )
         finally:
             if tmp_extra:
@@ -754,7 +755,7 @@ class WebBackend:
             return False
 
     def cancel(self):
-        self._cancel = True
+        self._cancel_event.set()  # ticket 11: wires through to process_file cancel_event
         return True
 
     def open_output_dir(self) -> bool:
