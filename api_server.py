@@ -170,6 +170,7 @@ class TranscribeServer:
         host: str = "0.0.0.0",
         token: str | None = None,
         on_log: Callable[[str], None] | None = None,
+        registry=None,
     ):
         self._get_engine = get_engine
         self._port = port
@@ -178,6 +179,15 @@ class TranscribeServer:
         self._on_log = on_log
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
+        # Shutdown gate: set by the ShutdownCoordinator step that stops the endpoint.
+        # New requests return 503 APP_STOPPING; in-flight ones are cancelled.
+        self.stopping: threading.Event = threading.Event()
+        # Optional job registry (ticket 09). When attached, each endpoint request
+        # is registered as an "endpoint" kind job occupying the inference lane.
+        self._registry = registry
+        # Track in-flight cancel events so cancel_inflight() can reach them.
+        self._inflight_lock = threading.Lock()
+        self._inflight: dict[str, threading.Event] = {}  # job_id -> cancel_event
 
     # ── 生命週期 ──────────────────────────────────────────────────────
     @property
@@ -248,6 +258,18 @@ class TranscribeServer:
                     self._send(401, "application/json",
                                b'{"error":{"message":"unauthorized: missing or invalid key"}}')
                     return
+                # APP_STOPPING gate (ticket 11 / g3): refuse new requests during shutdown.
+                if server.stopping.is_set():
+                    from shutdown import APP_STOPPING
+                    body = json.dumps(
+                        {"error": {"code": APP_STOPPING, "message": "server is stopping"}}
+                    ).encode("utf-8")
+                    self.send_response(503)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 try:
                     server._handle_transcribe(self)
                 except Exception as e:
@@ -268,6 +290,17 @@ class TranscribeServer:
             self._thread = None
             if self._on_log:
                 self._on_log("API 服務已停止")
+
+    def cancel_inflight(self) -> None:
+        """Set cancel_event on every in-flight request.
+
+        Called by the ShutdownCoordinator step that stops the endpoint (after
+        setting self.stopping) so in-flight requests are answered with an error
+        before the listener closes.  Safe to call multiple times.
+        """
+        with self._inflight_lock:
+            for ev in self._inflight.values():
+                ev.set()
 
     # ── 轉錄處理 ──────────────────────────────────────────────────────
     def _handle_transcribe(self, req: BaseHTTPRequestHandler):
@@ -311,8 +344,57 @@ class TranscribeServer:
         in_path = tmp_dir / ("upload" + ext)
         in_path.write_bytes(data)
 
+        # ── Registry entry (ticket 09 / g3): connection-bound "endpoint" job ─
+        # Each request occupies the single inference slot.  When a registry is
+        # attached, the job lifecycle is tracked; on disconnect registry.disconnect()
+        # is called (discards segments, marks cancelled, retains metadata).
+        cancel_event = threading.Event()
+        job = None
+        import uuid as _uuid
+        _inflight_key = str(_uuid.uuid4())
+        if self._registry is not None:
+            import time as _time
+            job = self._registry.submit(
+                kind="endpoint",
+                spec={"filename": filename},
+                lane="inference",
+            )
+            job.source = filename
+            job.timing = _time.monotonic()
+            _inflight_key = job.job_id
+            # Register in inflight map so cancel_inflight() can reach us
+            self._registry.start(job.job_id)
+        # Always register in inflight map so cancel_inflight() can reach us
+        with self._inflight_lock:
+            self._inflight[_inflight_key] = cancel_event
+
+        # ── Caller-disconnect probe (g3) ──────────────────────────────────────
+        # The progress callback probes the request socket via MSG_PEEK.  If the
+        # peer has closed the connection, recv returns an empty string and we set
+        # cancel_event so the engine stops at the next chunk boundary.
+        # Decision: we use a non-blocking peek rather than select() for simplicity
+        # and to avoid depending on the internal socket attribute name.
+        _req_connection = getattr(req, "connection", None)
+
+        def _progress_cb(done, total, msg):
+            if _req_connection is not None:
+                try:
+                    _req_connection.setblocking(False)
+                    data_peek = _req_connection.recv(1, socket.MSG_PEEK)
+                    _req_connection.setblocking(True)
+                    if data_peek == b"":
+                        # EOF: peer closed
+                        cancel_event.set()
+                except BlockingIOError:
+                    # No data available yet — connection still alive
+                    _req_connection.setblocking(True)
+                except OSError:
+                    # Socket already closed
+                    cancel_event.set()
+
         srt_path = None
         prev_align = getattr(eng, "use_aligner", None)
+        _cancelled = False
         try:
             audio_path = in_path
             original = in_path
@@ -343,15 +425,58 @@ class TranscribeServer:
             # 純文字/JSON 回應由下方依 resp_fmt 自 SRT 後處理產生。
             srt_path = eng.process_file(
                 audio_path,
+                progress_cb=_progress_cb,
                 language=language,
                 diarize=diarize,
                 n_speakers=n_speakers,
                 original_path=original,
                 out_format="srt",
+                cancel_event=cancel_event,
             )
+            # Check whether cancellation was triggered (disconnect or shutdown)
+            _cancelled = cancel_event.is_set()
         finally:
             if prev_align is not None and hasattr(eng, "use_aligner"):
                 eng.use_aligner = prev_align
+            # Remove from inflight map
+            with self._inflight_lock:
+                self._inflight.pop(_inflight_key, None)
+
+        if _cancelled:
+            # Caller disconnected or shutdown: discard partial results.
+            if job is not None and self._registry is not None:
+                self._registry.disconnect(job.job_id)
+            # Reply with 503 APP_STOPPING (covers both disconnect-cancel and
+            # shutdown-cancel; 499 would be more accurate for disconnect but 503
+            # is used uniformly here because the response format is the same and
+            # clients observing a disconnect will already have dropped the connection
+            # before this write arrives; the error is for shutdown-triggered cancels).
+            from shutdown import APP_STOPPING
+            body = json.dumps(
+                {"error": {"code": APP_STOPPING, "message": "request cancelled"}}
+            ).encode("utf-8")
+            try:
+                req.send_response(503)
+                req.send_header("Content-Type", "application/json")
+                req.send_header("Content-Length", str(len(body)))
+                req.end_headers()
+                req.wfile.write(body)
+            except OSError:
+                pass  # connection already closed by peer
+            # Clean up tmp
+            try:
+                import shutil
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
+            return
+
+        # Successful completion — update registry
+        if job is not None and self._registry is not None:
+            import time as _time
+            job.timing = _time.monotonic() - (job.timing or 0)
+            job.outcome = "completed"
+            self._registry.finish(job.job_id)
 
         srt_text = ""
         if srt_path and Path(srt_path).exists():
