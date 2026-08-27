@@ -43,6 +43,40 @@
     if (btn) switchView(btn.dataset.view);
   });
 
+  // ── 對齊能力描述符（從 status.alignment 快取，初始化為平台未支援預設值）──
+  var _alignDesc = (window.AlignmentView
+    ? AlignmentView.fromStatus(null)
+    : { showToggle: true, showChip: false, showBadge: false, chunkDisabled: false, faInUnsupported: false, statusLine: "", chipLabel: "", chipTooltip: "", chunkReason: "", method: "exact", state: "ready" });
+
+  /**
+   * applyAlignmentDescriptor — 將 AlignmentView 描述符套用至 DOM。
+   *
+   * - showToggle/showChip: 切換 #align-toggle-wrap 與 #align-chip 的可見性
+   * - showBadge: 顯示卡拉OK面板裡的 #align-badge
+   * - chunkDisabled: 停用 #set-chunk 滑桿
+   */
+  function applyAlignmentDescriptor(desc) {
+    if (!desc) return;
+    // 對齊切換控制項：正常開關 vs 唯讀小徽章
+    var toggleWrap = $("#align-toggle-wrap");
+    var chip       = $("#align-chip");
+    if (toggleWrap) toggleWrap.hidden = !!desc.showChip;
+    if (chip) {
+      chip.hidden  = !desc.showChip;
+      if (desc.chipLabel)   chip.textContent = desc.chipLabel;
+      if (desc.chipTooltip) chip.title       = desc.chipTooltip;
+    }
+    // 卡拉OK面板中的 ≈ 估算 badge
+    var badge = $("#align-badge");
+    if (badge) badge.hidden = !desc.showBadge;
+    // 每段最長秒數（字級對齊）設定滑桿
+    var chunkSlider = $("#set-chunk");
+    if (chunkSlider) {
+      chunkSlider.disabled = !!desc.chunkDisabled;
+      chunkSlider.title    = desc.chunkDisabled ? (desc.chunkReason || "") : "";
+    }
+  }
+
   // ── 狀態列 ──────────────────────────────────────────────
   async function refreshStatus() {
     const s = await API.getStatus();
@@ -52,6 +86,11 @@
       : (s.loading ? T("status.loading", "載入模型中…") : T("status.needModel", "尚未載入模型"));
     // 版本徽章：純數字版本前綴 v（如 v1.0.9）；已含文字者（如 webview 0.1）原樣顯示
     if (s.version) $("#app-version").textContent = /^\d/.test(s.version) ? "v" + s.version : s.version;
+    // 對齊能力：從後端 status.alignment 快照取得描述符並套用至 UI
+    if (window.AlignmentView && s.alignment) {
+      _alignDesc = AlignmentView.fromStatus(s.alignment);
+      applyAlignmentDescriptor(_alignDesc);
+    }
   }
 
   // ════════════════════════════════════════════════════════

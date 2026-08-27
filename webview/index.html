@@ -98,7 +98,8 @@
             <option value="auto" data-i18n="common.spkAuto">人數 自動</option>
             <option>2</option><option>3</option><option>4</option><option>5</option><option>6</option>
           </select>
-          <label class="switch"><input type="checkbox" id="sw-align" checked><span class="track"></span><span data-i18n="file.align">時間軸對齊</span></label>
+          <label class="switch" id="align-toggle-wrap"><input type="checkbox" id="sw-align" checked><span class="track"></span><span data-i18n="file.align">時間軸對齊</span></label>
+          <span id="align-chip" class="chip chip-muted" hidden title="精確字級對齊僅支援 Windows（chatllm ForcedAligner）。Ubuntu 使用比例估算。">字級時間軸：比例估算 ⓘ</span>
         </div>
 
         <div class="hint-head">
@@ -134,6 +135,7 @@
           </div>
           <!-- 卡拉OK舞台：逐字高亮放大跳動（由字級 words 驅動）。預設隱藏，按麥克風鈕切換。 -->
           <div class="karaoke" id="karaoke" hidden>
+            <span id="align-badge" class="chip chip-muted" hidden style="font-size:11px;vertical-align:middle;margin-bottom:4px">≈ 估算</span>
             <div class="kara-line" id="kara-line"></div>
             <div class="kara-next" id="kara-next"></div>
           </div>
@@ -280,7 +282,7 @@
         </div>
 
         <div class="sec-title" data-i18n="model.diag">診斷</div>
-        <div class="banner banner-warn" id="gpu-diag">
+        <div class="banner banner-warn" id="gpu-diag" hidden>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
           <div>GPU 偵測由 <code style="font-family:var(--font-mono)">crispasr.exe --diagnostics</code> 進行；若未列出獨立顯示卡，請更新顯卡 / Vulkan 驅動後重試。</div>
         </div>
@@ -325,6 +327,7 @@
 <script src="js/capability_view.js"></script>
 <script src="js/segments.js"></script>
 <script src="js/session_state.js"></script>
+<script src="js/alignment_view.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
