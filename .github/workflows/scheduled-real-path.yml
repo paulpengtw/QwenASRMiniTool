@@ -1,0 +1,147 @@
+name: Scheduled Real-Path Transcription
+
+# Weekly run to prove the full download-and-transcribe path on Ubuntu 24.04.
+# Also triggered manually via workflow_dispatch for on-demand validation.
+#
+# This job exercises the actual model download (cached between runs) and a
+# headless transcription pipeline on a synthetic audio fixture.
+#
+# No suitable committed speech clip exists in the repository (binary files
+# of that size are undesirable and model-specific), so the fixture is
+# generated inline: a 2-second 16 kHz mono WAV with a spoken-like tone
+# (amplitude-modulated sine wave) using numpy.  The pipeline is considered
+# to have passed when it returns EITHER:
+#   (a) a segments result (non-empty subtitles), or
+#   (b) the explicit no-voice diagnostic (engine._last_vad_diag is set),
+# meaning the audio pipeline ran to completion in a valid terminal state.
+# A crash or import error is a failure.
+
+on:
+  schedule:
+    # Weekly on Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  real-path:
+    name: Real-path transcription (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # System prerequisites (decision doc 01 / docs/ubuntu-prerequisites.md)
+      - name: Install apt prerequisites
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            python3 \
+            python3-venv \
+            python3-tk \
+            ca-certificates \
+            ffmpeg \
+            xdg-utils
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install Python environment
+        run: uv sync --extra dev
+
+      # Cache ov_models/ across weekly runs to avoid re-downloading ~GB each time.
+      - name: Cache OpenVINO model files
+        uses: actions/cache@v4
+        with:
+          path: ov_models/
+          key: ov-models-0p6b-${{ runner.os }}-v1
+
+      # Download the 0.6B model through the application's own downloader.
+      # Uses downloader.download_all() which is the same code path the UI calls.
+      # HF_HUB_OFFLINE is NOT set here — this job exists precisely to exercise
+      # real Hugging Face traffic in the weekly window.
+      - name: Download 0.6B model via app downloader
+        run: |
+          uv run python -c "
+          import sys, pathlib
+          sys.path.insert(0, str(pathlib.Path('.').resolve()))
+          from downloader import download_all
+          model_dir = pathlib.Path('ov_models')
+          model_dir.mkdir(exist_ok=True)
+          print('Downloading model...')
+          download_all(model_dir, progress_cb=lambda p, m: print(f'  {p*100:.0f}% {m}'))
+          print('Download complete.')
+          "
+
+      # Generate a synthetic 2-second 16 kHz mono WAV using numpy.
+      # An amplitude-modulated sine at ~220 Hz mimics a spoken-like tone.
+      # We assert the pipeline completes — result or no-voice diagnostic —
+      # without crashing.  See the workflow-level comment for pass criteria.
+      - name: Run headless transcription on synthetic fixture
+        run: |
+          uv run python -c "
+          import sys, pathlib, struct, math
+          import numpy as np
+
+          root = pathlib.Path('.').resolve()
+          sys.path.insert(0, str(root))
+
+          # ── Generate synthetic 2-second 16 kHz mono WAV ──────────────────
+          # Amplitude-modulated sine at 220 Hz, envelope at 4 Hz (speech-like).
+          sample_rate = 16000
+          duration    = 2.0
+          t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
+          carrier   = np.sin(2 * math.pi * 220 * t)
+          envelope  = 0.5 + 0.5 * np.sin(2 * math.pi * 4 * t)
+          audio_f32 = (carrier * envelope * 0.6).astype(np.float32)
+
+          # Write a minimal WAV file (PCM-16).
+          fixture = pathlib.Path('tests/fixtures/sample.wav')
+          fixture.parent.mkdir(parents=True, exist_ok=True)
+          pcm = (np.clip(audio_f32, -1.0, 1.0) * 32767).astype(np.int16)
+          data_bytes = pcm.tobytes()
+          with fixture.open('wb') as fh:
+              # RIFF header
+              data_len  = len(data_bytes)
+              chunk_len = 36 + data_len
+              fh.write(b'RIFF')
+              fh.write(struct.pack('<I', chunk_len))
+              fh.write(b'WAVE')
+              # fmt sub-chunk
+              fh.write(b'fmt ')
+              fh.write(struct.pack('<IHHIIHH',
+                  16,           # sub-chunk size
+                  1,            # PCM
+                  1,            # mono
+                  sample_rate,
+                  sample_rate * 2,  # byte rate
+                  2,            # block align
+                  16,           # bits per sample
+              ))
+              # data sub-chunk
+              fh.write(b'data')
+              fh.write(struct.pack('<I', data_len))
+              fh.write(data_bytes)
+          print(f'Fixture written: {fixture} ({len(pcm)} samples @ {sample_rate} Hz)')
+
+          # ── Load engine and run transcription ────────────────────────────
+          from app import ASREngine
+
+          model_dir = root / 'ov_models'
+          engine    = ASREngine()
+          engine.load(device='CPU', model_dir=model_dir)
+
+          if not engine.ready:
+              print('ERROR: engine.load() completed but engine.ready is False')
+              sys.exit(1)
+
+          result = engine.process_file(fixture)
+
+          # Pass criteria: result file returned (segments) OR no-voice diagnostic set.
+          if result is not None:
+              print(f'PASS: transcription returned output file: {result}')
+          elif engine._last_vad_diag:
+              print(f'PASS (no-voice diagnostic): {engine._last_vad_diag}')
+          else:
+              print('FAIL: process_file returned None with no diagnostic set')
+              sys.exit(1)
+          "

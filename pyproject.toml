@@ -50,8 +50,8 @@ gpu = [
     "kaldi-native-fbank>=1.19",
     "qwen-asr>=0.0.6",
 ]
-# Development tooling
-dev = ["pytest"]
+# Development tooling — pyyaml required by tests/test_ci_workflows.py
+dev = ["pytest", "pyyaml>=6.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
