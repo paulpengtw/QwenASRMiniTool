@@ -5,7 +5,9 @@
 時間軸（標點切行 + MAX_CHARS/MAX_WORDS 保護 + 孤兒行合併）。
 
 公開符號：
-    MAX_CHARS, _ZH_CLAUSE_END, _EN_SENT_END   斷句常數
+    MAX_CHARS, MAX_WORDS, _ZH_CLAUSE_END, _EN_SENT_END   斷句常數
+    split_to_lines(text)                       原文 → 字幕行
+    assign_ts(lines, g0, g1)                   字幕行 → 比例時間軸
     _srt_ts(s)                                秒 → SRT 時間戳
     _merge_orphan_lines(lines)                合併過短孤兒行
     _ts_chatllm_to_subtitle_lines(...)        字級 list → [(start,end,text,spk)]
@@ -14,8 +16,131 @@ from __future__ import annotations
 
 # ── 斷句常數（與舊 app.py 行為一致）──────────────────────────────────
 MAX_CHARS      = 20
+MAX_WORDS      = 8
+MIN_SUB_SEC    = 0.6
+GAP_SEC        = 0.08
 _ZH_CLAUSE_END = frozenset('，。？！；：…—、·')
 _EN_SENT_END   = frozenset('.,!?;')
+_SPLIT_PUNCT   = frozenset('，。？！；：…—、.,!?;:')
+
+
+def split_to_lines(text: str) -> list[str]:
+    """Split ASR text at punctuation and safe script-aware boundaries.
+
+    Pure non-Latin segments use ``MAX_CHARS``.  Once a segment contains an
+    ASCII-letter word, it uses the word boundary instead; mixed CJK/Latin
+    text therefore keeps adjacent CJK characters together and joins Latin
+    words with single spaces.  The boundary is checked after a word is
+    accumulated, matching the forced-alignment path's existing
+    ``len(words) > MAX_WORDS`` rule; this preserves the required worked
+    example's first line despite its nine whitespace-delimited words.
+    """
+    if not text or not text.strip():
+        return []
+
+    if "<asr_text>" in text:
+        text = text.split("<asr_text>", 1)[1]
+    text = text.strip()
+    lines: list[str] = []
+    buf = ""
+    word_count = 0
+    has_latin = False
+    has_long_word = False
+
+    def emit() -> None:
+        nonlocal buf, word_count, has_latin, has_long_word
+        value = buf.strip()
+        if value:
+            if has_latin:
+                lines.append(value)
+            else:
+                lines.extend(
+                    value[start:start + MAX_CHARS].strip()
+                    for start in range(0, len(value), MAX_CHARS)
+                    if value[start:start + MAX_CHARS].strip()
+                )
+        buf = ""
+        word_count = 0
+        has_latin = False
+        has_long_word = False
+
+    def is_ascii_alnum(char: str) -> bool:
+        return char.isascii() and (char.isalpha() or char.isdigit())
+
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch in _SPLIT_PUNCT:
+            emit()
+            i += 1
+            continue
+        if ch.isascii() and (ch.isalpha() or ch.isdigit()):
+            j = i
+            while j < len(text):
+                if is_ascii_alnum(text[j]):
+                    j += 1
+                elif (text[j] == "'" and j > i and j + 1 < len(text)
+                      and is_ascii_alnum(text[j - 1])
+                      and is_ascii_alnum(text[j + 1])):
+                    j += 1
+                else:
+                    break
+            word = text[i:j]
+            if not any(char.isascii() and char.isalpha() for char in word):
+                j = i
+            else:
+                if has_long_word:
+                    emit()
+                if len(word) > MAX_CHARS:
+                    if buf.strip():
+                        emit()
+                    buf = word
+                    word_count = 1
+                    has_latin = True
+                    has_long_word = True
+                    i = j
+                    continue
+                if has_latin and word_count > MAX_WORDS:
+                    emit()
+                if buf and not buf.endswith(" "):
+                    buf += " "
+                buf += word
+                word_count += 1
+                has_latin = True
+                i = j
+                continue
+        if ch == " ":
+            i += 1
+            continue
+
+        if has_long_word:
+            emit()
+        buf += ch
+        i += 1
+
+    emit()
+    return lines
+
+
+def assign_ts(lines: list[str], g0: float, g1: float) -> list[tuple[float, float, str]]:
+    if not lines:
+        return []
+    total = sum(len(line) for line in lines)
+    if total == 0:
+        return []
+    dur = g1 - g0
+    result = []
+    cur = g0
+    cumulative_len = 0
+    for i, line in enumerate(lines):
+        cumulative_len += len(line)
+        proportional_end = g0 + dur * cumulative_len / total
+        end = max(cur + MIN_SUB_SEC, proportional_end)
+        if i == len(lines) - 1:
+            end = max(end, g1)
+        result.append((cur, end, line))
+        cur = end + GAP_SEC
+    return result
 
 
 def _srt_ts(s: float) -> str:
@@ -208,7 +333,6 @@ def _ts_chatllm_to_subtitle_lines(
         with_words=True  → list[(start, end, text, spk, words)]
     """
     _all_punct = _ZH_CLAUSE_END | _EN_SENT_END
-    MAX_WORDS    = 8
     MAX_ZH_CHARS = MAX_CHARS
     # 內部一律以 5-tuple (start, end, text, spk, words) 累積，回傳前依 with_words 決定保留與否
     result: list[tuple] = []

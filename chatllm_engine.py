@@ -25,6 +25,8 @@ from pathlib import Path
 
 import numpy as np
 
+from subtitle_lines import split_to_lines as _split_to_lines, assign_ts as _assign_ts
+
 # ── 輸出語系旗標（由 app.py / app-gpu.py 切換時同步設定）──────────────
 # True = 直接輸出模型原始簡體；False = 經 OpenCC 轉為繁體
 _output_simplified: bool = False
@@ -642,44 +644,12 @@ def detect_degenerate_asr(text: str) -> str | None:
     return None
 
 
-def _split_to_lines(text: str) -> list[str]:
-    text = text.strip()
-    if not text:
-        return []
-    parts = re.split(r"[。！？，、；：…—,.!?;:]+", text)
-    lines = []
-    for p in parts:
-        p = p.strip()
-        if not p:
-            continue
-        while len(p) > MAX_CHARS:
-            lines.append(p[:MAX_CHARS]); p = p[MAX_CHARS:]
-        lines.append(p)
-    return [l for l in lines if l.strip()]
-
-
 def _srt_ts(s: float) -> str:
     ms = int(round(s * 1000))
     hh = ms // 3_600_000; ms %= 3_600_000
     mm = ms // 60_000;    ms %= 60_000
     ss = ms // 1_000;     ms %= 1_000
     return f"{hh:02d}:{mm:02d}:{ss:02d},{ms:03d}"
-
-
-def _assign_ts(lines: list[str], g0: float, g1: float) -> list[tuple[float, float, str]]:
-    if not lines:
-        return []
-    total = sum(len(l) for l in lines)
-    if total == 0:
-        return []
-    dur = g1 - g0; res = []; cur = g0
-    for i, line in enumerate(lines):
-        end = cur + max(MIN_SUB_SEC, dur * len(line) / total)
-        if i == len(lines) - 1:
-            end = max(end, g1)
-        res.append((cur, end, line))
-        cur = end + GAP_SEC
-    return res
 
 
 # ══════════════════════════════════════════════════════
@@ -1085,4 +1055,3 @@ class ChatLLMASREngine:
 
     def __del__(self):
         pass   # DLL runner 由 GC 自然回收（ctypes callback 會被 GC 清理）
-

@@ -66,6 +66,7 @@ except Exception:
 from subtitle_lines import (
     MAX_CHARS, _ZH_CLAUSE_END, _EN_SENT_END,
     _srt_ts, _merge_orphan_lines, _ts_chatllm_to_subtitle_lines,
+    split_to_lines as _split_to_lines, assign_ts as _assign_ts,
     write_transcript,
 )
 import subtitle_lines as _subs
@@ -223,92 +224,7 @@ def _detect_speech_groups(audio: np.ndarray, vad_sess, max_group_sec: int = MAX_
     return result
 
 
-def _split_to_lines(text: str) -> list[str]:
-    """以標點符號切分短句，移除標點，每句獨立成行。
-
-    斷句規則（英文/中文統一）：
-    1. 所有標點（,.!?;: 及中文，。？！；：…—）→ 立即切行，標點不輸出
-    2. 英文整字為最小單位，詞前補空格（詞界）
-    3. MAX_CHARS 保護：超限才強制換行
-    """
-    if "<asr_text>" in text:
-        text = text.split("<asr_text>", 1)[1]
-    text = text.strip()
-    if not text:
-        return []
-
-    # 中文、英文標點統一觸發切行（含英文逗號）
-    PUNCT = frozenset('，。？！；：…—、.,!?;:')
-    lines: list[str] = []
-    buf   = ""
-
-    i = 0
-    while i < len(text):
-        ch = text[i]
-
-        # ── 標點符號：切行，標點不加入輸出（隱藏）────────────────────
-        if ch in PUNCT:
-            if buf.strip():
-                lines.append(buf.strip())
-            buf = ""
-            i += 1
-            continue
-
-        # ── 英文單字：整字收集，詞前補空格（詞界）────────────────────
-        if ch.isalpha() and ord(ch) < 128:
-            j = i
-            while j < len(text) and text[j].isalpha() and ord(text[j]) < 128:
-                j += 1
-            word = text[i:j]
-            prefix = " " if buf and not buf.endswith(" ") else ""
-            if len(buf) + len(prefix) + len(word) > MAX_CHARS and buf.strip():
-                lines.append(buf.strip())
-                buf = word
-            else:
-                buf += prefix + word
-            i = j
-            continue
-
-        # ── 空格：保留分詞間距 ────────────────────────────────────────
-        if ch == " ":
-            if buf and not buf.endswith(" "):
-                buf += " "
-            i += 1
-            if len(buf.rstrip()) >= MAX_CHARS:
-                lines.append(buf.strip())
-                buf = ""
-            continue
-
-        # ── 中文/日文/數字等：逐字累積 ────────────────────────────────
-        buf += ch
-        i += 1
-        if len(buf) >= MAX_CHARS:
-            lines.append(buf.strip())
-            buf = ""
-
-    if buf.strip():
-        lines.append(buf.strip())
-    return [l for l in lines if l.strip()]
-
-
-
 # _srt_ts 已移至 subtitle_lines（共用）
-
-
-def _assign_ts(lines: list[str], g0: float, g1: float) -> list[tuple[float, float, str]]:
-    if not lines:
-        return []
-    total = sum(len(l) for l in lines)
-    if total == 0:
-        return []
-    dur = g1 - g0; res = []; cur = g0
-    for i, line in enumerate(lines):
-        end = cur + max(MIN_SUB_SEC, dur * len(line) / total)
-        if i == len(lines) - 1:
-            end = max(end, g1)
-        res.append((cur, end, line))
-        cur = end + GAP_SEC
-    return res
 
 
 def _find_vad_model(model_dir: Path | None = None) -> Path | None:
