@@ -32,6 +32,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from webview_backend import WebBackend
+from job_registry import JobRegistry
 
 
 def resolve_web_dir() -> Path:
@@ -101,6 +102,11 @@ class WebViewServer:
         self.host = host
         self.hub = _EventHub()
         self.backend = WebBackend(on_event=self.hub.publish)
+        self.registry = JobRegistry()
+        # Publish registry events as SSE "job" events
+        self.registry.subscribe(
+            lambda ev, payload: self.hub.publish("job", {"event": ev, "payload": payload})
+        )
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._want_port = port
@@ -182,6 +188,24 @@ class WebViewServer:
                     return self._qr(urlparse(self.path).query)
                 if path == "/api/batch":
                     return self._json(server.backend.get_batch())
+                if path == "/api/snapshot":
+                    b = server.backend
+                    try:
+                        endpoint = b.get_endpoint()
+                    except Exception:
+                        endpoint = None
+                    try:
+                        tunnel = b.get_tunnel()
+                    except Exception:
+                        tunnel = None
+                    return self._json({
+                        "status": b.get_status(),
+                        "jobs": server.registry.snapshot(),
+                        "endpoint": endpoint,
+                        "tunnel": tunnel,
+                    })
+                if path == "/api/jobs":
+                    return self._json(server.registry.snapshot())
                 if path == "/api/events":
                     return self._sse()
                 if path.startswith("/api/"):
@@ -219,13 +243,52 @@ class WebViewServer:
                         act = self._read_json_body().get("action")
                         return self._json(server.backend.toggle_tunnel(act == "start"))
                     if path == "/api/transcribe":
-                        return self._transcribe()
+                        return self._transcribe_job()
                     if path == "/api/cancel":
                         return self._json({"ok": server.backend.cancel()})
                     if path == "/api/open-output":
                         return self._json({"ok": server.backend.open_output_dir()})
                     if path == "/api/check-update":
                         return self._json(server.backend.open_releases())
+                    # /api/jobs/<id>/cancel
+                    # /api/jobs/<id>/segments/<idx>
+                    # /api/jobs/<id>/saved
+                    if path.startswith("/api/jobs/"):
+                        parts = path.split("/")
+                        # parts: ['', 'api', 'jobs', '<id>', ...]
+                        if len(parts) >= 5:
+                            job_id = parts[3]
+                            sub = parts[4]
+                            if sub == "cancel":
+                                try:
+                                    server.registry.cancel(job_id)
+                                    return self._json({"ok": True})
+                                except KeyError:
+                                    return self._err(404, "job not found")
+                            if sub == "segments" and len(parts) >= 6:
+                                try:
+                                    idx = int(parts[5])
+                                except (ValueError, IndexError):
+                                    return self._err(400, "invalid segment index")
+                                body = self._read_json_body()
+                                text = body.get("text")
+                                if text is None:
+                                    return self._err(400, "missing text")
+                                try:
+                                    server.registry.edit_segment(job_id, idx, str(text))
+                                    return self._json({"ok": True})
+                                except (KeyError, IndexError) as exc:
+                                    return self._err(404, str(exc))
+                            if sub == "saved":
+                                body = self._read_json_body()
+                                path_val = body.get("path")
+                                if not path_val:
+                                    return self._err(400, "missing path")
+                                try:
+                                    server.registry.record_saved_path(job_id, str(path_val))
+                                    return self._json({"ok": True})
+                                except KeyError:
+                                    return self._err(404, "job not found")
                     return self._err(404, "unknown api")
                 except Exception as e:
                     return self._err(500, str(e))
@@ -294,7 +357,8 @@ class WebViewServer:
                     server.hub.unsubscribe(q)
 
             # ── 轉錄（multipart 上傳）─────────────────────────
-            def _transcribe(self):
+            def _transcribe_job(self):
+                """Create a registry job for a single-file transcription request."""
                 from api_server import _parse_multipart
                 ctype = self.headers.get("Content-Type", "")
                 if "multipart/form-data" not in ctype or "boundary=" not in ctype:
@@ -314,24 +378,48 @@ class WebViewServer:
 
                 opts = {
                     "path": str(in_path),
-                    "name": filename,        # 原始上傳檔名 → 輸出字幕用它命名、落 subtitles/
+                    "name": filename,
                     "language": (fields.get("language") or "").strip() or None,
                     "diarize": (fields.get("diarize", "") or "").lower() in ("1", "true", "on", "yes"),
                     "nSpeakers": fields.get("n_speakers", ""),
                     "align": (fields.get("align", "1") or "").lower() in ("1", "true", "on", "yes"),
                     "hint": fields.get("hint", ""),
                 }
-                try:
-                    result = server.backend.transcribe(
-                        opts, progress_cb=lambda pct, status:
-                        server.hub.publish("progress", {"pct": pct, "status": status}))
-                    return self._json(result)
-                finally:
+
+                # Create a registry job and run it through the inference lane
+                job = server.registry.submit(kind="single", spec=opts, lane="inference")
+                job_id = job.job_id
+
+                def _run():
+                    import shutil
                     try:
-                        import shutil
-                        shutil.rmtree(tmp_dir, ignore_errors=True)
-                    except Exception:
-                        pass
+                        server.registry.start(job_id)
+                        result = server.backend.transcribe(
+                            opts, progress_cb=lambda pct, status: (
+                                server.registry.update_progress(job_id, pct, 100, status),
+                                server.hub.publish("progress", {"job_id": job_id, "pct": pct, "status": status}),
+                            ))
+                        segs = result.get("segments", [])
+                        if segs:
+                            server.registry.append_segments(job_id, segs)
+                        srt_path = result.get("srtPath")
+                        if srt_path:
+                            server.registry.record_saved_path(job_id, srt_path)
+                        server.registry.finish(job_id, result=result)
+                    except Exception as exc:
+                        try:
+                            server.registry.fail(job_id, str(exc))
+                        except Exception:
+                            pass
+                    finally:
+                        try:
+                            shutil.rmtree(tmp_dir, ignore_errors=True)
+                        except Exception:
+                            pass
+
+                t = threading.Thread(target=_run, daemon=True)
+                t.start()
+                return self._json({"job_id": job_id, "ok": True})
 
         self._httpd = ThreadingHTTPServer((self.host, self._want_port), _Handler)
         self.port = self._httpd.server_address[1]      # 取得實際綁定的埠（port=0 時）

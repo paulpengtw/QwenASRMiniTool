@@ -1286,6 +1286,65 @@
       updateLoadBtn();
     }
   });
+  // ── Local app stopped full-screen overlay ─────────────
+  function _showLocalAppStopped(reason) {
+    let existing = document.getElementById("local-app-stopped-overlay");
+    if (existing) return;
+    const overlay = document.createElement("div");
+    overlay.id = "local-app-stopped-overlay";
+    overlay.style.cssText = [
+      "position:fixed", "inset:0", "z-index:9999",
+      "background:rgba(0,0,0,0.85)", "color:#fff",
+      "display:flex", "flex-direction:column",
+      "align-items:center", "justify-content:center",
+      "text-align:center", "padding:2rem", "gap:1rem",
+    ].join(";");
+    const reasonLabel = reason === "user-quit" ? T("stopped.userQuit", "使用者結束")
+      : reason === "signal" ? T("stopped.signal", "收到中止信號")
+      : reason === "replaced" ? T("stopped.replaced", "被新版本取代")
+      : T("stopped.crash", "應用程式中斷");
+    overlay.innerHTML = `
+      <div style="font-size:2rem">⚠️</div>
+      <div style="font-size:1.4rem;font-weight:bold">
+        Local app stopped / 本機應用程式已停止
+      </div>
+      <div style="opacity:0.8">${reasonLabel}</div>
+      <div style="margin-top:1rem;opacity:0.7;max-width:480px;line-height:1.6">
+        ${T("stopped.instructions",
+          "請關閉此分頁，或在終端機執行 <code>./run.sh</code> 重新啟動應用程式。")}
+      </div>
+    `;
+    document.body.appendChild(overlay);
+  }
+
+  // Listen for bridge events: snapshot fetch on connect/reconnect, stopped overlay
+  API.on("_bridge_snapshot", snap => {
+    // Render from the server snapshot on every (re)connect
+    if (snap && snap.status) {
+      // Update status bar inline without a full API round-trip
+      const s = snap.status;
+      const el = $("#model-status");
+      if (el) {
+        el.classList.toggle("loading", !s.modelReady);
+        const t = el.querySelector(".t");
+        if (t) t.textContent = s.modelReady ? T("status.ready", "模型已就緒")
+          : (s.loading ? T("status.loading", "載入模型中…") : T("status.needModel", "尚未載入模型"));
+        if (s.version) {
+          const vEl = document.getElementById("app-version");
+          if (vEl) vEl.textContent = /^\d/.test(s.version) ? "v" + s.version : s.version;
+        }
+      }
+    }
+  });
+
+  API.on("_bridge_stopped", ({ reason }) => {
+    _showLocalAppStopped(reason || "crash");
+  });
+
+  API.on("stopping", payload => {
+    _showLocalAppStopped((payload && payload.reason) || "stopping");
+  });
+
   (async function init() {
     await API.ready;
     await refreshStatus();
