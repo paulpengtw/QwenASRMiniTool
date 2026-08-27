@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "impl/**"]
+  pull_request:
+
+jobs:
+  # ── Ubuntu 24.04 per-PR job ────────────────────────────────────────────────
+  #
+  # Installs documented apt prerequisites, sets up the Python environment via
+  # uv, runs the preflight check (exit 0 required; degraded is acceptable),
+  # the full pytest suite, the JS test suite, and the requirements sync guard.
+  #
+  # HF_HUB_OFFLINE=1 is mandatory: no Hugging Face traffic is permitted during
+  # PR CI (third-party uptime must never block a merge).
+  ubuntu:
+    name: Ubuntu 24.04
+    runs-on: ubuntu-24.04
+
+    env:
+      HF_HUB_OFFLINE: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # System prerequisites (decision doc 01 / ubuntu-prerequisites.md)
+      - name: Install apt prerequisites
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            python3 \
+            python3-venv \
+            python3-tk \
+            ca-certificates \
+            ffmpeg \
+            xdg-utils \
+            nodejs \
+            npm
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install Python environment
+        run: uv sync --extra dev
+
+      # Preflight: exit 0 is required (degraded is fine; fatal is not)
+      - name: Run preflight
+        run: uv run python preflight.py
+
+      # Full Python test suite — HF_HUB_OFFLINE ensures no downloads
+      - name: Run Python tests
+        run: uv run pytest -q
+
+      # JS test suite
+      - name: Run JS tests
+        run: node --test tests/js/
+
+      # Guard: requirements.txt must match uv export output
+      - name: Check requirements sync
+        run: bash scripts/check-requirements-sync.sh "$(which uv)"
+
+  # ── Windows per-PR job ────────────────────────────────────────────────────
+  #
+  # Runs only the portable cross-platform invariants (decision doc 07):
+  #   - settings schema round-trip (test_settings_store.py)
+  #   - platform_seams import (test_platform_seams_import.py)
+  #   - requirements.txt == uv export
+  #
+  # GPU engines, CrispASR, chatllm, and frozen-EXE first-run are manual
+  # pre-release checklist items only (no hosted runner can execute them).
+  windows:
+    name: Windows latest
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install Python environment
+        run: uv sync --extra dev
+
+      # Portable invariant 1: settings schema round-trip
+      - name: Run settings store tests
+        run: uv run pytest -q tests/test_settings_store.py
+
+      # Portable invariant 2: platform_seams import
+      - name: Run platform_seams import test
+        run: uv run pytest -q tests/test_platform_seams_import.py
+
+      # Portable invariant 3: requirements sync
+      - name: Check requirements sync
+        shell: bash
+        run: bash scripts/check-requirements-sync.sh "$(which uv)"
