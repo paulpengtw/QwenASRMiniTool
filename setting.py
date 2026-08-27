@@ -582,7 +582,13 @@ class SettingsTab(ctk.CTkScrollableFrame):
 
         # 介面縮放
         if hasattr(self, "_scale_seg"):
-            scale = float(settings.get("ui_scale", 1.0))
+            try:
+                from settings_store import read_ui_scale_multiplier as _rscale
+                import app as _app_mod
+                scale = _rscale(getattr(_app_mod, "SETTINGS_FILE",
+                                        __import__("pathlib").Path("settings.json")))
+            except Exception:
+                scale = float(settings.get("ui_scale", 1.0))
             label = min(
                 self._SCALE_MAP,
                 key=lambda k: abs(self._SCALE_MAP[k] - scale),
