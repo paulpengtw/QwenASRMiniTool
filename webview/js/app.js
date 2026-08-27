@@ -6,6 +6,12 @@
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
   const API = window.QwenAPI;
+  const SessionState = window.SessionState;
+
+  // ── Reconnectable session state (maintained across SSE reconnects) ───────
+  // Initialised here; applySnapshot is called on every (re)connect;
+  // applyEvent is called for every SSE event that mutates session state.
+  let _sessionState = SessionState ? SessionState.initialState() : null;
   // i18n 取字（含 {n} 等簡單插值）；無字典或無此鍵時回退預設值 def。
   function T(key, def, vars) {
     let s = (window.I18N && I18N.t(key)) || def || key;
@@ -1319,7 +1325,17 @@
 
   // Listen for bridge events: snapshot fetch on connect/reconnect, stopped overlay
   API.on("_bridge_snapshot", snap => {
-    // Render from the server snapshot on every (re)connect
+    // Rebuild client session state from the server snapshot on every (re)connect.
+    // This restores job state (snap.jobs), status, endpoint, and tunnel so that a
+    // reconnecting browser client renders purely from the server registry snapshot.
+    if (SessionState && _sessionState) {
+      _sessionState = SessionState.applySnapshot(_sessionState, snap);
+      // snap.jobs is processed by applySnapshot above; log for diagnostics
+      const jobs = _sessionState.jobs;
+      if (jobs.length) {
+        console.info("[app] snapshot restored", jobs.length, "job(s) from registry");
+      }
+    }
     if (snap && snap.status) {
       // Update status bar inline without a full API round-trip
       const s = snap.status;
@@ -1336,6 +1352,24 @@
       }
     }
   });
+
+  // Apply all SSE job and connection events to _sessionState via applyEvent so that
+  // the session state stays current between snapshot fetches.  The bridge emits every
+  // named event from the server; we apply the ones SessionState understands.
+  if (SessionState) {
+    const _SSE_EVENTS = [
+      "reconnecting", "connected", "stopping", "stopped",
+      "status", "tunnel", "endpoint",
+      "submitted", "started", "finished", "failed", "cancelled", "progress",
+      "segments_appended", "segment_edited", "path_saved", "note_added",
+      "item_started", "item_finished", "item_failed",
+    ];
+    _SSE_EVENTS.forEach(ev => {
+      API.on(ev, payload => {
+        if (_sessionState) _sessionState = SessionState.applyEvent(_sessionState, ev, payload);
+      });
+    });
+  }
 
   API.on("_bridge_stopped", ({ reason }) => {
     _showLocalAppStopped(reason || "crash");
