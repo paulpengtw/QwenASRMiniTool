@@ -166,6 +166,34 @@ that `PR_SET_PDEATHSIG` and `killpg` cleanup worked correctly (decision 07).
 
 ---
 
+## Step 11 — Run automated test suite (ticket 15)
+
+After Step 3 (`uv sync`), the full test suite can be run without a display or
+model files.  It includes headless end-to-end tests that prove the orphan-process
+cleanup and Windows-preference derived fallback (ticket 15):
+
+```bash
+.venv/bin/python -m pytest -q
+node --test tests/js/
+```
+
+**Expected:**
+- All Python tests pass (no failures, 3 PytestRemovedIn10Warning are expected
+  and harmless).
+- All Node.js tests pass (86 pass, 0 fail).
+
+The headless e2e tests (`tests/test_headless_e2e.py`) start a real server
+subprocess with `QWEN_NO_BROWSER=1`, exercise `/health`, `/api/capabilities`,
+`/api/snapshot`, and `POST /api/quit`, and verify that:
+- `/api/capabilities` reports `effective_backend: openvino` on Linux even when
+  the persisted preference is a Windows-only backend (derived fallback).
+- `POST /api/quit` exits with code 0 and removes the session file.
+- A SIGKILLed server causes its child processes to die (`PR_SET_PDEATHSIG`).
+
+These tests require no network, no model files, and no display.
+
+---
+
 ## Re-run when
 
 - The `apt` prerequisite list changes (new package added or removed).

@@ -34,6 +34,23 @@ def _make_app_stub():
     stub.ASREngine = _FakeEngine
     stub.ASREngine1p7B = _FakeEngine
     stub.probe_vulkan_devices = lambda *a, **kw: []
+
+    # Ticket 15: backend-reader audit — include the derived-fallback helpers
+    # so tests that import `app` and call these pure functions get real behaviour.
+    def _ui_core_model(settings: dict):
+        """settings → (core_label, model_label); derived fallback: openvino."""
+        backend = settings.get("backend", "openvino")
+        if backend == "crispasr":
+            q = settings.get("crisp_quant", "q5")
+            label = {"q4": "Breeze Q4 (輕量)", "q5": "Breeze Q5 (標準)",
+                     "q8": "Breeze Q8 (精確)"}.get(q, "Breeze Q5 (標準)")
+            return "Whisper (Breeze)", label
+        if backend == "chatllm":
+            return "Qwen", "Qwen3-ASR-1.7B Q8 (Vulkan)"
+        sz = settings.get("cpu_model_size", "0.6B")
+        return "Qwen", ("Qwen3-ASR-1.7B INT8" if "1.7B" in sz else "Qwen3-ASR-0.6B")
+
+    stub._ui_core_model = _ui_core_model
     return stub
 
 
