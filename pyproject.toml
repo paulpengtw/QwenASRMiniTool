@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "qwen-asr-mini-tool"
+version = "0.1.0"
+requires-python = ">=3.11"
+# Ubuntu 24.04 ships Python 3.12; 3.11 minimum kept so the current dev venv
+# can run the suite. Do not lower to 3.10 — kaldi-native-fbank wheels are 3.11+.
+dependencies = [
+    # GUI — customtkinter stays a main dependency: the browser backend still
+    # imports the Tk graph at module load (webview_backend -> app).
+    # This is a documented transitional coupling, deferred pending verification
+    # of customtkinter on Tk 9.0 (shipped by uv-managed interpreters).
+    "customtkinter>=5.2.0",
+    # Inference engines
+    "openvino>=2024.0.0",
+    "onnxruntime>=1.17.0",
+    # Audio processing
+    "numpy>=1.24.0",
+    "librosa>=0.10.0",
+    "sounddevice>=0.4.6",
+    # Direct declarations previously missing or accidentally transitive:
+    "soundfile>=0.12.0",
+    "soxr>=0.3.0",
+    "scipy>=1.10.0",
+    "tokenizers>=0.15.0",
+    "kaldi-native-fbank>=1.19",
+    # TLS — required on Ubuntu where the virtual environment does not inherit
+    # the system trust store automatically.
+    "certifi>=2024.0.0",
+    # Chinese conversion (simplified → traditional)
+    "opencc-python-reimplemented>=0.1.7",
+    # Model download helpers
+    "huggingface_hub>=0.20.0",
+    "requests>=2.30.0",
+    "tqdm>=4.65.0",
+]
+
+[project.optional-dependencies]
+# QR-code sharing (optional feature)
+qr = ["segno"]
+# Native WebView window — Windows only. pywebview uses WebView2 on Windows.
+# This extra is intentionally not installed on Ubuntu (no WebView2 runtime).
+windows = ["pywebview>=6.0"]
+# GPU mode: adds qwen-asr and CUDA-capable kaldi-native-fbank.
+# torch (CUDA) must be installed separately; see requirements-gpu.txt for details.
+gpu = [
+    "kaldi-native-fbank>=1.19",
+    "qwen-asr>=0.0.6",
+]
+# Development tooling
+dev = ["pytest"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[tool.uv]
+# Use the system Python 3.12 on Ubuntu 24.04; a uv-managed interpreter ships
+# Tk 9.0, on which customtkinter is unverified while the browser backend still
+# imports the Tk graph at module load.
+python-preference = "system"
