@@ -39,6 +39,10 @@ class BatchItem:
         self.progress  = 0.0       # 0.0–1.0
         self.srt_path: Path | None = None
         self.error_msg = ""
+        # Ticket 08: coded per-item error for workflow contract refusals.
+        # Set to {"code": ..., "params": {...}, "remedy": ...} when the item
+        # is skipped due to a degraded capability (e.g., VIDEO_NEEDS_FFMPEG).
+        self.coded_error: dict | None = None
         self.duration  = 0.0       # 秒（背景載入）
 
     @property
@@ -490,11 +494,22 @@ class BatchTab(ctk.CTkFrame):
             if is_video(item.path):
                 ffmpeg = find_ffmpeg()
                 if not ffmpeg:
-                    raise RuntimeError(
-                        "需要 ffmpeg 才能處理影片。\n"
-                        "請在「音檔轉字幕」頁籤先完成 ffmpeg 下載，"
-                        "或手動安裝 ffmpeg 並加入系統 PATH。"
-                    )
+                    # Ticket 08: skip with coded per-item error (same code as
+                    # api_server's /v1/audio/transcriptions refusal).
+                    import sys as _sys
+                    _remedy = ("sudo apt install ffmpeg"
+                               if _sys.platform != "win32"
+                               else "Install FFmpeg from https://ffmpeg.org")
+                    _code = ("RECORDING_NEEDS_FFMPEG"
+                             if item.path.suffix.lower() == ".webm"
+                             else "VIDEO_NEEDS_FFMPEG")
+                    item.coded_error = {"code": _code, "params": {}, "remedy": _remedy}
+                    item.status    = "失敗"
+                    item.error_msg = _remedy
+                    item.progress  = 0.0
+                    self.after(0, lambda it=item: self._sync_row(it))
+                    self.after(0, self._refresh_status)
+                    return
                 tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
                 os.close(tmp_fd)
                 tmp_wav = Path(tmp_path)

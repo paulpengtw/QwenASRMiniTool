@@ -57,9 +57,24 @@ CODES: dict[str, dict] = {
         "severity": "degraded",
     },
     "CLOUDFLARED_MISSING": {
-        "en": "cloudflared is not on PATH. Tunnel features are unavailable.",
-        "zh": "cloudflared 不在 PATH 中，通道功能無法使用。",
+        "en": "cloudflared is not on PATH. Tunnel features are unavailable. Install via package manager (e.g. apt, brew) or download from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/",
+        "zh": "cloudflared 不在 PATH 中，通道功能無法使用。請透過套件管理員安裝（如 apt、brew）或從 https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/ 下載。",
         "severity": "degraded",
+    },
+    "VIDEO_NEEDS_FFMPEG": {
+        "en": "This video file requires FFmpeg to extract audio. Remedy: {remedy}",
+        "zh": "此影片需要 FFmpeg 提取音軌。修復方式：{remedy}",
+        "severity": "degraded",
+    },
+    "RECORDING_NEEDS_FFMPEG": {
+        "en": "Microphone recording (WebM/Opus) requires FFmpeg to process. Remedy: {remedy}",
+        "zh": "麥克風錄音（WebM/Opus）需要 FFmpeg 才能處理。修復方式：{remedy}",
+        "severity": "degraded",
+    },
+    "ENDPOINT_LAN_EXPOSED": {
+        "en": "The endpoint is now accessible from other machines on this local network at: {urls}",
+        "zh": "端點現在可從區域網路上的其他電腦存取，網址：{urls}",
+        "severity": "info",
     },
     "ALIGN_WINDOWS_ONLY": {
         "en": "Forced alignment is only supported on Windows.",

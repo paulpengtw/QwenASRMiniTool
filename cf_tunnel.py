@@ -17,9 +17,11 @@ import os
 import re
 import shutil
 import ssl
+import queue as _queue
 import subprocess
 import sys
 import threading
+import time
 import urllib.request
 from pathlib import Path
 
@@ -27,6 +29,12 @@ _NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 _CF_URL = ("https://github.com/cloudflare/cloudflared/releases/latest/"
            "download/cloudflared-windows-amd64.exe")
 _TRYCF_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+
+# Module-level spawn alias so tests can patch cf_tunnel._spawn without
+# touching platform_seams globally.
+def _spawn(*args, **kwargs):
+    from platform_seams import spawn as _ps_spawn
+    return _ps_spawn(*args, **kwargs)
 
 
 def _base_dir() -> Path:
@@ -102,24 +110,58 @@ def make_qr_png(data: str) -> bytes | None:
 
 
 class CloudflareTunnel:
-    """管理單一 cloudflared quick tunnel 子程序（指向本機某埠）。"""
+    """管理單一 cloudflared quick tunnel 子程序（指向本機某埠）。
+
+    start-timeout, cancel, stop, and shutdown all converge on _terminate().
+    """
+
+    _DEFAULT_TIMEOUT = 30.0  # seconds (ticket 08: hard 30-second startup timeout)
 
     def __init__(self):
         self._proc: subprocess.Popen | None = None
         self.url: str | None = None          # 含金鑰的完整外網網址
         self.status: str = ""                # 最近一次狀態訊息（"ready"=已就緒）
         self._lock = threading.Lock()
+        self._cancel_event = threading.Event()
 
     @property
     def running(self) -> bool:
         return self._proc is not None
 
-    def start(self, port: int, token: str | None = None, status_cb=None) -> str | None:
+    def _terminate(self, proc: subprocess.Popen | None) -> None:
+        """Single converged terminate path used by timeout, cancel, stop, and shutdown."""
+        if proc is None:
+            return
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+    def start(
+        self,
+        port: int,
+        token: str | None = None,
+        status_cb=None,
+        timeout: float | None = None,
+        cancel: threading.Event | None = None,
+    ) -> str | None:
         """建立指向 http://127.0.0.1:<port> 的快速通道，阻塞直到取得網址或失敗。
 
+        Hard timeout (ticket 08): if no URL is found within `timeout` seconds
+        (default 30 s, injectable for tests), the subprocess is terminated and
+        None is returned with status set to "failed: <captured output>".
+
+        Cancellable during startup via the `cancel` threading.Event or the
+        tunnel's internal cancel event (set by stop()/shutdown()).
+
+        start-timeout, cancel, stop, and shutdown all converge on _terminate().
+
         建議於背景執行緒呼叫。status_cb(msg) 回報進度（含 "ready"）。
-        缺 cloudflared 會自動下載（約 25MB）。回傳含金鑰的完整外網網址。
+        缺 cloudflared 會自動下載（約 25MB，Windows only）。回傳含金鑰的完整外網網址。
         """
+        if timeout is None:
+            timeout = self._DEFAULT_TIMEOUT
+
         def _set(msg: str):
             self.status = msg
             if status_cb:
@@ -131,6 +173,8 @@ class CloudflareTunnel:
         with self._lock:
             if self._proc is not None:
                 return self.url
+
+        self._cancel_event.clear()
 
         cf = find_cloudflared()
         if cf is None:
@@ -149,7 +193,6 @@ class CloudflareTunnel:
         except Exception:
             pass
 
-        from platform_seams import spawn as _spawn
         proc = _spawn(
             [str(cf), "--config", str(empty_cfg), "tunnel",
              "--url", f"http://127.0.0.1:{port}", "--no-autoupdate"],
@@ -159,32 +202,84 @@ class CloudflareTunnel:
         with self._lock:
             self._proc = proc
 
-        # 讀 stdout 找 trycloudflare 網址
-        for line in proc.stdout:                                  # type: ignore
+        # ── Timeout-aware URL search ─────────────────────────────────────
+        # Read stdout in a background thread, push lines into a queue so
+        # the main loop can poll with a deadline (iterating proc.stdout
+        # blocks indefinitely with no timeout facility).
+        line_q: _queue.Queue = _queue.Queue()
+
+        def _reader(p):
+            try:
+                for line in p.stdout:  # type: ignore
+                    line_q.put(line)
+            except Exception:
+                pass
+            finally:
+                line_q.put(None)  # sentinel: process ended or stdout closed
+
+        reader_t = threading.Thread(target=_reader, args=(proc,), daemon=True)
+        reader_t.start()
+
+        deadline = time.monotonic() + timeout
+        url_found = False
+        captured: list[str] = []
+
+        while True:
+            # Check cancellation (internal event or caller-supplied event)
+            if self._cancel_event.is_set() or (cancel and cancel.is_set()):
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break  # hard timeout reached
+            try:
+                line = line_q.get(timeout=min(remaining, 0.05))
+            except _queue.Empty:
+                continue
+            if line is None:
+                break  # process ended
+            captured.append(line)
             m = _TRYCF_RE.search(line)
             if m:
                 self.url = m.group(0) + (f"/?k={token}" if token else "/")
                 _set("ready")
+                url_found = True
                 break
-        # 持續排空輸出避免管線阻塞，直到程序結束
+
+        if not url_found:
+            # Timeout, cancel, or process exit without URL → terminate.
+            with self._lock:
+                self._proc = None
+            self._terminate(proc)
+            self.url = None
+            cap_text = "".join(captured)[:500].strip()
+            _set(f"failed: {cap_text}" if cap_text else "failed")
+            return None
+
+        # URL found — drain remaining output in background to prevent pipe stalls.
         threading.Thread(target=self._drain, args=(proc,), daemon=True).start()
         return self.url
 
     def _drain(self, proc: subprocess.Popen):
         try:
-            for _ in proc.stdout:                                 # type: ignore
+            for _ in proc.stdout:  # type: ignore
                 pass
         except Exception:
             pass
 
     def stop(self):
+        """Stop the tunnel. Converges on _terminate() (ticket 08)."""
+        self._cancel_event.set()
         with self._lock:
             proc = self._proc
             self._proc = None
-        if proc is not None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
+        self._terminate(proc)
         self.url = None
         self.status = ""
+
+    def cancel(self):
+        """Cancel an in-progress startup. Converges on _terminate() via the cancel event."""
+        self._cancel_event.set()
+
+    def shutdown(self):
+        """Alias for stop() — called during app shutdown."""
+        self.stop()

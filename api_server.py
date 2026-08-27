@@ -113,6 +113,42 @@ def get_local_ip() -> str:
         return "127.0.0.1"
 
 
+def get_lan_ips() -> list:
+    """Return every non-loopback IPv4 address bound to this host.
+
+    Used by toggle_endpoint / get_endpoint to populate lan_urls so the UI can
+    display the reachable addresses and show the exposure notice
+    (ENDPOINT_LAN_EXPOSED) on Ubuntu where there is no OS firewall prompt.
+    """
+    addrs: list[str] = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if not ip.startswith("127."):
+                addrs.append(ip)
+    except Exception:
+        pass
+    # Fallback: UDP trick (same as get_local_ip)
+    if not addrs:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            if not ip.startswith("127."):
+                addrs.append(ip)
+        except Exception:
+            pass
+    # Deduplicate preserving order
+    seen: set[str] = set()
+    result: list[str] = []
+    for ip in addrs:
+        if ip not in seen:
+            seen.add(ip)
+            result.append(ip)
+    return result
+
+
 class TranscribeServer:
     """背景 HTTP 轉錄服務。與 GUI 同行程，共用既有引擎。
 
@@ -285,7 +321,15 @@ class TranscribeServer:
                 from ffmpeg_utils import find_ffmpeg, extract_audio_to_wav
                 ff = find_ffmpeg()
                 if not ff:
-                    self._reply_err(req, 400, "上傳為影片但找不到 ffmpeg，無法抽音軌")
+                    # Coded refusal (ticket 08): WebM/Opus = recording, others = video.
+                    import sys as _sys
+                    _remedy = ("sudo apt install ffmpeg"
+                               if _sys.platform != "win32"
+                               else "Install FFmpeg from https://ffmpeg.org")
+                    _code = ("RECORDING_NEEDS_FFMPEG"
+                             if ext.lower() == ".webm"
+                             else "VIDEO_NEEDS_FFMPEG")
+                    self._reply_coded(req, 409, _code, {}, _remedy)
                     return
                 wav_path = tmp_dir / "audio.wav"
                 extract_audio_to_wav(in_path, wav_path, ff)
@@ -351,6 +395,25 @@ class TranscribeServer:
     def _reply_err(self, req, code, msg):
         body = json.dumps({"error": {"message": msg}}, ensure_ascii=False).encode("utf-8")
         req.send_response(code)
+        req.send_header("Content-Type", "application/json")
+        req.send_header("Content-Length", str(len(body)))
+        req.end_headers()
+        req.wfile.write(body)
+
+    def _reply_coded(self, req, http_code: int, capability_code: str,
+                     params: dict | None = None, remedy: str = "") -> None:
+        """Reply with a machine-readable coded error (ticket 08 workflow contract).
+
+        Body: {"error": {"code": <capability_code>, "params": {...}, "remedy": "..."}}
+        """
+        body = json.dumps({
+            "error": {
+                "code": capability_code,
+                "params": params or {},
+                "remedy": remedy,
+            }
+        }, ensure_ascii=False).encode("utf-8")
+        req.send_response(http_code)
         req.send_header("Content-Type", "application/json")
         req.send_header("Content-Length", str(len(body)))
         req.end_headers()

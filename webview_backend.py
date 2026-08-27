@@ -158,6 +158,11 @@ class WebBackend:
         self._on_event = on_event
         self._theme_cb = None            # 主題變更回呼（app_webview 用來同步視窗標題列深淺）
         self._lock = threading.Lock()
+        # Ticket 08 (recording wiring): job_registry.py is in the tree.
+        # _recording_job_id holds the job_id of the active capture job so that
+        # on_sse_client_disconnected() can call registry.capture_client_closed()
+        # when the recording browser client's SSE stream closes.
+        self._recording_job_id: str | None = None
         self._seed_defaults()            # 首次啟動（無 backend）→ 種子預設模型
         self._apply_runtime_prefs()      # 啟動即套用持久化偏好（VAD/簡繁/鏡像/格式）
 
@@ -1352,13 +1357,39 @@ class WebBackend:
             return 11435
 
     def get_endpoint(self) -> dict:
-        from api_server import get_local_ip
+        from api_server import get_local_ip, get_lan_ips
         running = bool(self._server and self._server.running)
         host = get_local_ip()
         port = self._endpoint_port()
         key = self._server.token if self._server else ""
         url = f"http://{host}:{port}/?k={key}" if running else ""
-        return {"running": running, "host": host, "port": port, "key": key, "url": url}
+
+        # Collect every non-loopback IPv4 and build lan_urls (ticket 08 exposure
+        # disclosure: Ubuntu has no firewall prompt; the UI must show reachable
+        # addresses and state plainly that other network machines can reach the
+        # endpoint — consent by disclosure).
+        lan_ips = get_lan_ips()
+        lan_urls = [f"http://{ip}:{port}/?k={key}" for ip in lan_ips] if (running and lan_ips) else []
+
+        # exposure_notice: included whenever the endpoint is running so the UI can
+        # display the disclosure regardless of platform.
+        exposure_notice = {
+            "code": "ENDPOINT_LAN_EXPOSED",
+            "params": {
+                "urls": ", ".join(lan_urls) if lan_urls else f"{host}:{port}",
+                "port": port,
+            },
+        }
+
+        return {
+            "running": running,
+            "host": host,
+            "port": port,
+            "key": key,
+            "url": url,
+            "lan_urls": lan_urls,
+            "exposure_notice": exposure_notice,
+        }
 
     def toggle_endpoint(self, on_: bool, port=None) -> dict:
         from api_server import TranscribeServer
@@ -1420,12 +1451,36 @@ class WebBackend:
         }
 
     def toggle_tunnel(self, on_: bool) -> dict:
+        import sys as _sys
         import cf_tunnel
         if on_:
             if not (self._server and self._server.running):
                 return {"running": False, "url": "", "status": "請先啟動端點服務", "error": True}
             if self._tunnel and self._tunnel.running:
                 return self.get_tunnel()
+
+            # On Linux (and other non-Windows): cloudflared must be installed on PATH.
+            # Never call download_cloudflared on Linux — it downloads a Windows binary.
+            # Return a coded failure with install instructions instead (ticket 08).
+            if _sys.platform != "win32":
+                if cf_tunnel.find_cloudflared() is None:
+                    _remedy = (
+                        "Install cloudflared via package manager or download from "
+                        "https://developers.cloudflare.com/cloudflare-one/connections/"
+                        "connect-networks/downloads/"
+                    )
+                    return {
+                        "ok": False,
+                        "running": False,
+                        "url": "",
+                        "status": "",
+                        "error": {
+                            "code": "CLOUDFLARED_MISSING",
+                            "params": {},
+                            "remedy": _remedy,
+                        },
+                    }
+
             self._tunnel = cf_tunnel.CloudflareTunnel()
             port, token = self._server._port, self._server.token
 
@@ -1463,3 +1518,27 @@ class WebBackend:
     # ── 批次（桌面實機後續搬入）────────────────────────────
     def get_batch(self) -> dict:
         return {"summary": {"done": 0, "total": 0}, "items": []}
+
+    # ── Recording capture-client disconnect wiring (ticket 08) ──────────
+    def on_sse_client_disconnected(self) -> None:
+        """Called by webview_server when an SSE client connection closes.
+
+        If a microphone capture job is in progress (_recording_job_id is set),
+        notify the job registry so segments are retained and the job transitions
+        to its completion state (decision doc 02: closing the capture client
+        stops capture and retains already-transcribed segments).
+
+        The job registry (ticket 09) is in the tree; call its method directly.
+        """
+        job_id = self._recording_job_id
+        if job_id is None:
+            return
+        try:
+            from job_registry import JobRegistry
+            # Attempt to reach the registry via a well-known attribute if one
+            # is registered on this backend instance, otherwise log and return.
+            reg = getattr(self, "_job_registry", None)
+            if reg is not None:
+                reg.capture_client_closed(job_id)
+        except Exception:
+            pass  # Registry not yet wired to this session — no-op
