@@ -144,5 +144,46 @@
     apply(document);
   }
 
-  window.I18N = { setLang, t, apply, get locale() { return LOCALE; } };
+  // ── renderCode: render a capability code from /api/message-codes ──────────
+  // Cached promise so the fetch happens at most once per session.
+  let _codesTablePromise = null;
+  function _getCodesTable() {
+    if (!_codesTablePromise) {
+      _codesTablePromise = window.QwenAPI
+        ? window.QwenAPI.getMessageCodes().catch(() => ({}))
+        : Promise.resolve({});
+    }
+    return _codesTablePromise;
+  }
+
+  /**
+   * Render a capability code to a human-readable string using the server's
+   * /api/message-codes table.  The current UI locale is used to pick the
+   * display language (zh-TW / zh-CN → "zh", English → "en").
+   *
+   * Returns a Promise<string>.  Falls back to the raw code string on error.
+   *
+   * @param {string} code    e.g. "FFMPEG_MISSING"
+   * @param {Object} params  template params e.g. { path: "/usr/bin/ffmpeg" }
+   * @returns {Promise<string>}
+   */
+  async function renderCode(code, params) {
+    try {
+      const table = await _getCodesTable();
+      // capability_view.js must be loaded before i18n.js calls this
+      const cvRender = window.CapabilityView && window.CapabilityView.renderCode;
+      const cvLang   = window.CapabilityView && window.CapabilityView.resolveDisplayLang;
+      if (cvRender && cvLang) {
+        // Map i18n LOCALE to the two-bucket display lang
+        const uiLangStr = LOCALE === "hans" ? "zh-CN" : (LOCALE === "en" ? "en" : "zh-TW");
+        return cvRender(code, params || {}, table, cvLang(uiLangStr));
+      }
+      // Fallback: return code as-is
+      return String(code);
+    } catch (e) {
+      return String(code);
+    }
+  }
+
+  window.I18N = { setLang, t, apply, renderCode, get locale() { return LOCALE; } };
 })();

@@ -168,6 +168,8 @@
     async listDevices() { return apiGet("/api/devices"); },
     async setBackend(id) { return apiPost("/api/backend", { index: id }); },
     async getModelOptions() { return apiGet("/api/model-options"); },
+    async getCapabilities() { return apiGet("/api/capabilities"); },
+    async getMessageCodes() { return apiGet("/api/message-codes"); },
     async setModel(core, model) { return apiPost("/api/model", { core, model }); },
     // 首次選定模型 → 就地下載並載入（進度走 SSE "progress"，完成走 "status"）
     async startLoad() { return apiPost("/api/load", {}); },
