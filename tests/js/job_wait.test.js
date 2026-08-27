@@ -101,6 +101,22 @@ test("decide returns reject for failed state", () => {
   assert.equal(d.error.message, "Engine exploded");
 });
 
+test("decide preserves the message from a structured failed-job error", () => {
+  const d = decide({
+    job_id: "j4",
+    state: "failed",
+    segments: [],
+    saved_paths: [],
+    error: {
+      code: "VIDEO_NEEDS_FFMPEG",
+      params: { filename: "clip.mp4" },
+      message: "Install ffmpeg to transcribe this video.",
+    },
+  });
+  assert.equal(d.action, "reject");
+  assert.equal(d.error.message, "Install ffmpeg to transcribe this video.");
+});
+
 test("decide reject uses generic message when error field is null", () => {
   const job = {
     job_id: "j4",

@@ -25,6 +25,20 @@
     return Math.min(1000 * Math.pow(2, attempt), 10000);
   }
 
+  function _emitServerEvent(event, payload) {
+    let normalized = payload;
+    // Registry progress uses done/total/message; the legacy UI progress
+    // listener consumes pct/status.  Carry both views in one event.
+    if (event === "progress" && payload && payload.pct == null
+        && payload.done != null && payload.total) {
+      normalized = Object.assign({}, payload, {
+        pct: Math.round((payload.done / payload.total) * 100),
+        status: payload.message == null ? "" : String(payload.message),
+      });
+    }
+    emit(event, normalized);
+  }
+
   function connectSSE() {
     try {
       const es = new EventSource("/api/events" + (KEY ? "?k=" + encodeURIComponent(KEY) : ""));
@@ -32,13 +46,21 @@
         _sseAttempt = 0;
         _sseHealthRetries = 0;
         emit("_bridge_connected", {});
+        emit("connected", {});
         // Fetch snapshot on every SSE (re)connect
         _fetchSnapshot();
       };
       es.onmessage = e => {
         try {
           const m = JSON.parse(e.data);
-          if (m && m.event) emit(m.event, m.payload);
+          if (m && m.event === "job") {
+            emit("job", m.payload);
+            const inner = m.payload && m.payload.payload;
+            const innerEvent = m.payload && m.payload.event;
+            if (innerEvent) _emitServerEvent(innerEvent, inner);
+          } else if (m && m.event) {
+            _emitServerEvent(m.event, m.payload);
+          }
           if (m && m.event === "stopping") {
             _handleStopped(m.payload && m.payload.reason ? m.payload.reason : "stopping");
           }
@@ -58,6 +80,7 @@
     const delay = _backoffMs(_sseAttempt);
     _sseAttempt++;
     emit("_bridge_reconnecting", { attempt: _sseAttempt, delayMs: delay });
+    emit("reconnecting", { attempt: _sseAttempt, delayMs: delay });
     setTimeout(() => _healthThenReconnect(), delay);
   }
 
@@ -95,6 +118,7 @@
 
   function _handleStopped(reason) {
     emit("_bridge_stopped", { reason });
+    emit("stopped", { reason });
   }
 
   function _fetchSnapshot() {
@@ -121,6 +145,20 @@
     return h;
   }
   function withKey(path) { return KEY ? path + (path.includes("?") ? "&" : "?") + "k=" + encodeURIComponent(KEY) : path; }
+  async function _renderError(error, fallback) {
+    if (error && typeof error === "object") {
+      if (error.code) {
+        try {
+          const rendered = await window.I18N?.renderCode(error.code, error.params || {});
+          if (rendered && String(rendered) !== String(error.code)) return String(rendered);
+        } catch {}
+        return String(error.message || fallback || error.code);
+      }
+      if (error.message) return String(error.message);
+    }
+    if (error != null && String(error).length > 0) return String(error);
+    return String(fallback || "Request failed");
+  }
   async function apiGet(path) {
     const r = await fetch(withKey(path), { headers: authHeaders() });
     if (!r.ok) throw new Error("HTTP " + r.status);
@@ -133,7 +171,10 @@
     });
     if (!r.ok) {
       let msg = "HTTP " + r.status;
-      try { msg = (await r.json()).error?.message || msg; } catch {}
+      try {
+        const payload = await r.json();
+        msg = await _renderError(payload.error, msg);
+      } catch {}
       throw new Error(msg);
     }
     return r.json();
@@ -170,7 +211,13 @@
     async getModelOptions() { return apiGet("/api/model-options"); },
     async getCapabilities() { return apiGet("/api/capabilities"); },
     async getMessageCodes() { return apiGet("/api/message-codes"); },
-    async setModel(core, model) { return apiPost("/api/model", { core, model }); },
+    async setModel(core, model) {
+      const result = await apiPost("/api/model", { core, model });
+      if (result?.error && !result.message) {
+        result.message = await _renderError(result.error, result.message);
+      }
+      return result;
+    },
     // 首次選定模型 → 就地下載並載入（進度走 SSE "progress"，完成走 "status"）
     async startLoad() { return apiPost("/api/load", {}); },
     async getLanguages() { return apiGet("/api/languages"); },
@@ -185,7 +232,13 @@
 
     // 對外臨時網址（Cloudflare）
     async getTunnel() { return apiGet("/api/tunnel"); },
-    async toggleTunnel(on_) { return apiPost("/api/tunnel", { action: on_ ? "start" : "stop" }); },
+    async toggleTunnel(on_) {
+      const result = await apiPost("/api/tunnel", { action: on_ ? "start" : "stop" });
+      if (result?.error && !result.status) {
+        result.status = await _renderError(result.error, result.status);
+      }
+      return result;
+    },
 
     qrSrc(data) {
       if (!data) return "";
@@ -224,7 +277,10 @@
     const r = await fetch(withKey("/api/transcribe"), { method: "POST", body: fd, headers: authHeaders() });
     if (!r.ok) {
       let msg = "HTTP " + r.status;
-      try { msg = (await r.json()).error?.message || msg; } catch {}
+      try {
+        const payload = await r.json();
+        msg = await _renderError(payload.error, msg);
+      } catch {}
       throw new Error(msg);
     }
     const { job_id } = await r.json();
@@ -267,7 +323,9 @@
           resolve(dec.result);
         } else if (dec.action === "reject") {
           cleanup();
-          reject(dec.error);
+          _renderError(job.error, dec.error?.message)
+            .then(function (message) { reject(new Error(message)); })
+            .catch(function () { reject(dec.error); });
         }
       }
 
@@ -298,7 +356,13 @@
   /** Minimal fallback decide() used if job_wait.js is not loaded. */
   function _fallbackDecide(job) {
     const state = job && job.state;
-    if (state === "failed") return { action: "reject", error: new Error(job.error || "Transcription failed") };
+    if (state === "failed") {
+      const error = job && job.error;
+      const message = error && typeof error === "object"
+        ? (error.message || error.code || "Transcription failed")
+        : (error || "Transcription failed");
+      return { action: "reject", error: new Error(String(message)) };
+    }
     if (state === "completed" || state === "cancelled") {
       const paths = Array.isArray(job.saved_paths) ? job.saved_paths : [];
       return {

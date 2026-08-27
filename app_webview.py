@@ -427,27 +427,10 @@ def linux_main(
 
     # Build shutdown steps for the Ubuntu path.
     def _broadcast():
-        srv.hub.publish("stopping", {"reason": "user-quit"})
+        srv.hub.publish("stopping", {"reason": getattr(coord, "reason", "user-quit")})
 
     def _stop_accepting():
         srv._accepting_work = False
-
-    def _cancel_registry_jobs():
-        # Cancel all active registry jobs (if backend exposes a registry).
-        try:
-            reg = getattr(srv.backend, "job_registry", None)
-            if reg is not None:
-                snap = reg.snapshot()
-                for job in snap.get("jobs", []):
-                    jid = job.get("job_id")
-                    state = job.get("state", "")
-                    if state in ("queued", "running", "capturing") and jid:
-                        try:
-                            reg.cancel(jid)
-                        except Exception:
-                            pass
-        except Exception:
-            pass
 
     def _terminate_children():
         children.terminate_all()
@@ -486,15 +469,21 @@ def linux_main(
     steps = [
         _broadcast,
         _stop_accepting,
-        _cancel_registry_jobs,
         _terminate_children,
         _flush_settings,
         _close_sse,
-        _stop_server,
         _delete_session,
+        _stop_server,
     ]
 
-    coord = ShutdownCoordinator(steps=steps)
+    coord = ShutdownCoordinator(
+        steps=steps,
+        endpoint_server=getattr(srv.backend, "endpoint_server", None),
+        job_registry=getattr(srv.backend, "job_registry", None),
+    )
+    attach_coordinator = getattr(srv.backend, "attach_shutdown_coordinator", None)
+    if callable(attach_coordinator):
+        attach_coordinator(coord)
 
     # Wire the quit endpoint.
     srv.shutdown_coordinator = coord

@@ -81,6 +81,48 @@ def test_step_order_is_respected():
     assert exit_calls == [0]
 
 
+def test_shutdown_reason_is_visible_to_ordered_steps():
+    """Steps can publish the actual user-quit/signal/replaced reason."""
+    seen: List[str | None] = []
+    coord = None
+
+    def record_reason():
+        seen.append(coord.reason)
+
+    coord = ShutdownCoordinator(steps=[record_reason], exit_fn=lambda _code: None)
+    coord.begin("signal", exit_code=130)
+
+    assert seen == ["signal"]
+
+
+def test_endpoint_shutdown_cancels_before_listener_close():
+    """LAN shutdown sets the gate and cancels requests before closing its listener."""
+    log: List[str] = []
+
+    class _Stopping:
+        def set(self):
+            log.append("stopping.set")
+
+    class _Endpoint:
+        stopping = _Stopping()
+
+        def cancel_inflight(self):
+            log.append("cancel_inflight")
+
+        def stop(self):
+            log.append("listener.close")
+
+    coord = ShutdownCoordinator(
+        steps=[],
+        endpoint_server=_Endpoint(),
+        job_registry=object(),
+        exit_fn=lambda _code: None,
+    )
+    coord.begin("user-quit")
+
+    assert log == ["stopping.set", "cancel_inflight", "listener.close"]
+
+
 def test_step_exception_does_not_skip_later_steps():
     """An exception in a step is swallowed and later steps still run."""
     log: List[str] = []

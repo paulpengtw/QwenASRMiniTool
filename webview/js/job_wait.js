@@ -27,8 +27,11 @@
     var state = job.state;
 
     if (TERMINAL_REJECT[state]) {
-      var msg = (job.error && String(job.error).length > 0)
-        ? String(job.error)
+      var error = job.error;
+      var msg = (error && typeof error === "object")
+        ? (error.message || error.code || "Transcription failed")
+        : (error && String(error).length > 0)
+          ? String(error)
         : "Transcription failed";
       return { action: "reject", error: new Error(msg) };
     }

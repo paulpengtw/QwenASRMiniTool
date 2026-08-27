@@ -451,3 +451,174 @@ class TestJobRegistryWiring:
                    for n in job_dict.get("notes", [])), (
             f"Expected note about capture client closure, got {job_dict.get('notes')}"
         )
+
+    def test_backend_exposes_registry_for_endpoint_and_shutdown(self):
+        """The registry is available through the backend's public lifecycle seam."""
+        from webview_server import WebViewServer
+
+        server = WebViewServer(host="127.0.0.1", port=0)
+        assert server.backend.job_registry is server.registry
+        assert server.backend.endpoint_server is None
+
+
+def test_endpoint_constructor_receives_backend_job_registry(monkeypatch):
+    """LAN endpoint jobs must share the webview registry and shutdown lane."""
+    import threading
+
+    import api_server
+    from webview_backend import WebBackend
+
+    registry = object()
+    backend = WebBackend.__new__(WebBackend)
+    backend.engine = object()
+    backend._server = None
+    backend._tunnel = None
+    backend._job_registry = registry
+    backend._lock = threading.Lock()
+    backend._settings_raw = lambda: {"endpoint_port": 11435}
+    backend._persist_setting = lambda _key, _value: None
+    backend.get_endpoint = lambda: {"running": True}
+
+    captured = {}
+
+    class _FakeEndpoint:
+        _port = 11435
+
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(api_server, "TranscribeServer", _FakeEndpoint)
+    backend.toggle_endpoint(True)
+
+    assert captured["registry"] is registry
+
+
+def test_endpoint_start_updates_attached_shutdown_coordinator(monkeypatch):
+    """Starting the LAN endpoint after app startup must still wire shutdown."""
+    import threading
+
+    import api_server
+    from webview_backend import WebBackend
+
+    backend = WebBackend.__new__(WebBackend)
+    backend.engine = object()
+    backend._server = None
+    backend._tunnel = None
+    backend._job_registry = object()
+    backend._shutdown_coordinator = MagicMock()
+    backend._lock = threading.Lock()
+    backend._settings_raw = lambda: {"endpoint_port": 11435}
+    backend._persist_setting = lambda _key, _value: None
+    backend.get_endpoint = lambda: {"running": True}
+
+    class _FakeEndpoint:
+        _port = 11435
+
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(api_server, "TranscribeServer", _FakeEndpoint)
+    backend.toggle_endpoint(True)
+
+    backend._shutdown_coordinator.set_endpoint_server.assert_called_once_with(backend._server)
+
+
+def test_api_server_coded_refusal_fails_registry_job_with_message():
+    """An endpoint's coded FFmpeg refusal must not leave its job running."""
+    from api_server import TranscribeServer
+    from job_registry import JobRegistry
+
+    registry = JobRegistry()
+    engine = _StubEngine()
+    server = TranscribeServer(
+        get_engine=lambda: engine,
+        port=_find_free_port(),
+        host="127.0.0.1",
+        registry=registry,
+    )
+    server.start()
+    try:
+        import platform_seams
+
+        with patch.object(platform_seams, "find_executable", return_value=None):
+            status, body = _post_transcribe(
+                server._port, server.token, "clip.mp4", b"fake-mp4-data"
+            )
+        assert status == 409
+        error = body["error"]
+        assert error["code"] == "VIDEO_NEEDS_FFMPEG"
+        from capability_codes import render
+        expected_message = render(
+            "VIDEO_NEEDS_FFMPEG",
+            {"remedy": "sudo apt install ffmpeg"},
+            lang="en",
+        )
+        assert error["message"] == expected_message
+
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            jobs = registry.snapshot()["jobs"]
+            if jobs and jobs[0]["state"] == "failed":
+                break
+            time.sleep(0.01)
+        assert jobs[0]["state"] == "failed"
+        assert jobs[0]["error"] == {
+            "code": "VIDEO_NEEDS_FFMPEG",
+            "params": {"remedy": "sudo apt install ffmpeg"},
+            "message": expected_message,
+        }
+    finally:
+        server.stop()
+
+
+def test_api_server_coded_engine_failure_fails_registry_job_with_message():
+    """An engine exception must become a terminal structured registry failure."""
+    from api_server import TranscribeServer
+    from job_registry import JobRegistry
+
+    class _CodedEngineFailure(Exception):
+        code = "BACKEND_PLATFORM_UNSUPPORTED"
+        params = {"backend": "crispasr"}
+        message = "Backend is unavailable on this platform."
+
+    registry = JobRegistry()
+    engine = _StubEngine()
+
+    def _fail(*_args, **_kwargs):
+        raise _CodedEngineFailure("Backend is unavailable on this platform.")
+
+    engine.process_file = _fail
+    server = TranscribeServer(
+        get_engine=lambda: engine,
+        port=_find_free_port(),
+        host="127.0.0.1",
+        registry=registry,
+    )
+    server.start()
+    try:
+        status, body = _post_transcribe(
+            server._port, server.token, "audio.wav", b"fake-wav-data"
+        )
+        assert status == 500
+        assert body["error"]["message"] == "Backend is unavailable on this platform."
+
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            jobs = registry.snapshot()["jobs"]
+            if jobs and jobs[0]["state"] == "failed":
+                break
+            time.sleep(0.01)
+        assert jobs[0]["state"] == "failed"
+        assert jobs[0]["error"] == {
+            "code": "BACKEND_PLATFORM_UNSUPPORTED",
+            "params": {"backend": "crispasr"},
+            "message": "Backend is unavailable on this platform.",
+        }
+    finally:
+        server.stop()

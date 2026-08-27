@@ -156,6 +156,8 @@ class WebBackend:
         self._cancel_event = threading.Event()  # ticket 11: chunk-boundary cancel
         self._server = None              # api_server.TranscribeServer（LAN 端點）
         self._tunnel = None              # cf_tunnel.CloudflareTunnel（對外臨時網址，延遲建立）
+        self._job_registry = None        # WebView JobRegistry shared with LAN endpoint
+        self._shutdown_coordinator = None
         self._on_event = on_event
         self._theme_cb = None            # 主題變更回呼（app_webview 用來同步視窗標題列深淺）
         self._lock = threading.Lock()
@@ -166,6 +168,33 @@ class WebBackend:
         self._recording_job_id: str | None = None
         self._seed_defaults()            # 首次啟動（無 backend）→ 種子預設模型
         self._apply_runtime_prefs()      # 啟動即套用持久化偏好（VAD/簡繁/鏡像/格式）
+
+    @property
+    def job_registry(self):
+        """Registry shared by webview jobs, endpoint jobs, and shutdown."""
+        return self._job_registry
+
+    def attach_job_registry(self, registry) -> None:
+        """Attach the webview registry and update an already-running endpoint."""
+        self._job_registry = registry
+        if self._server is not None:
+            self._server._registry = registry
+
+    @property
+    def endpoint_server(self):
+        """Currently running LAN endpoint, if any."""
+        return self._server
+
+    def attach_shutdown_coordinator(self, coordinator) -> None:
+        """Keep endpoint lifecycle wiring live as the UI starts/stops the endpoint."""
+        self._shutdown_coordinator = coordinator
+        if coordinator is not None:
+            coordinator.set_endpoint_server(self._server)
+
+    @property
+    def settings_store(self):
+        """Persistent settings object for the launcher shutdown flush step."""
+        return self._store
 
     # ── SettingsStore（懶建立）─────────────────────────────────────────────
     @property
@@ -1433,11 +1462,21 @@ class WebBackend:
                     self._server.stop()                 # 換埠 → 丟棄舊服務重建
                     self._server = None
             if not self._server:
-                self._server = TranscribeServer(get_engine=lambda: self.engine, port=target)
+                self._server = TranscribeServer(
+                    get_engine=lambda: self.engine,
+                    port=target,
+                    registry=self.job_registry,
+                )
             self._server.start()
+            coordinator = getattr(self, "_shutdown_coordinator", None)
+            if coordinator is not None:
+                coordinator.set_endpoint_server(self._server)
         elif self._server:
             self._stop_tunnel()              # 端點停 → 外網通道一併停（金鑰/埠失效）
             self._server.stop()
+            coordinator = getattr(self, "_shutdown_coordinator", None)
+            if coordinator is not None:
+                coordinator.set_endpoint_server(None)
         return self.get_endpoint()
 
     def _persist_setting(self, key: str, value):
