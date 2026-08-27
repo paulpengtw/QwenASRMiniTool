@@ -182,6 +182,11 @@ class WebViewServer:
                     return self._qr(urlparse(self.path).query)
                 if path == "/api/batch":
                     return self._json(server.backend.get_batch())
+                if path == "/api/capabilities":
+                    return self._json(server.backend.get_capabilities())
+                if path == "/api/message-codes":
+                    import capability_codes, json as _json
+                    return self._json(_json.loads(capability_codes.as_json()))
                 if path == "/api/events":
                     return self._sse()
                 if path.startswith("/api/"):

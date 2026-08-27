@@ -389,10 +389,52 @@ class WebBackend:
         self.engine = eng
 
     # ── 狀態 ────────────────────────────────────────────────
+    def get_capabilities(self) -> dict:
+        """Return the full capability snapshot (ticket 05)."""
+        import sys as _sys
+        from capabilities import build_snapshot
+        from platform_seams import find_executable
+        from settings_store import SettingsStore
+
+        platform = _sys.platform
+        # Build a lightweight SettingsStore wrapper from the raw settings dict.
+        # We use a mock-compatible duck-typed object so we don't need a real path.
+        raw = self._settings_raw()
+
+        class _StoreAdapter:
+            def __init__(self, data):
+                self._data = data
+                self.recovered = None
+                self.session_ignored = []
+
+            def get(self, key, default=None):
+                return self._data.get(key, default)
+
+        store = _StoreAdapter(raw)
+
+        # Probes
+        ffmpeg_path = find_executable("ffmpeg")
+        cloudflared_path = find_executable("cloudflared")
+        model_present = self.selected_model_present()
+        model_state = "ready" if bool(getattr(self.engine, "ready", False)) else (
+            "loading" if self._loading else (
+                "error" if self._load_err else "unloaded"
+            )
+        )
+        probes = {
+            "ffmpeg": bool(ffmpeg_path),
+            "cloudflared": bool(cloudflared_path),
+            "model_present": model_present,
+            "model_state": model_state,
+            "model_error": self._load_err if model_state == "error" else None,
+            "diarization": False,   # updated by diarization probe if available
+        }
+        return build_snapshot(platform, store, probes)
+
     def get_status(self) -> dict:
         from alignment_policy import alignment_capability
         active = getattr(self, "_active_backend", "openvino")
-        return {
+        status = {
             "modelReady": bool(getattr(self.engine, "ready", False)),
             "loading": self._loading,
             "error": self._load_err,
@@ -408,7 +450,10 @@ class WebBackend:
             "selectedReady": self.selected_model_present(),
             # 字級時間軸對齊能力快照（ticket 07）
             "alignment": alignment_capability(),
+            # Capability snapshot (ticket 05)
+            "capabilities": self.get_capabilities(),
         }
+        return status
 
     def selected_model_present(self) -> bool:
         """目前持久化選擇的『那一個』模型檔是否已下載。
@@ -915,13 +960,29 @@ class WebBackend:
         }
 
     def set_model(self, core_label: str, model_label: str) -> dict:
-        """選定 (核心,模型) → 寫對應 settings 鍵、回是否需重啟。"""
+        """選定 (核心,模型) → 寫對應 settings 鍵、回是否需重啟。
+
+        Guard: refuse platform_unsupported backend choices with a coded error.
+        Windows binaries are never downloaded on Linux.
+        """
+        import sys as _sys
+        from capabilities import _supported_backends, _BACKEND_KEYS
         entry = next((e for e in _MODEL_CATALOG
                       if e[0] == core_label and e[1] == model_label), None)
         if entry is None:   # 防呆：退回該核心首項 / 目錄首項
             entry = next((e for e in _MODEL_CATALOG if e[0] == core_label),
                          _MODEL_CATALOG[0])
         core_label, model_label, backend, patch = entry
+
+        # Guard: refuse platform-unsupported backend
+        if backend not in _supported_backends(_sys.platform):
+            return {
+                "ok": False,
+                "error": {
+                    "code": "BACKEND_PLATFORM_UNSUPPORTED",
+                    "params": {"backend": _BACKEND_KEYS.get(backend, backend)},
+                },
+            }
 
         f = Path(getattr(core, "SETTINGS_FILE", BASE_DIR / "settings.json"))
         try:
