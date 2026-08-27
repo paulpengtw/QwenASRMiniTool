@@ -10,37 +10,75 @@
 """
 from __future__ import annotations
 
+import errno
 import hashlib
+import http.client
+import os
+import socket
 import ssl
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
+# ── Public exceptions ──────────────────────────────────────────────────────────
+
+class OfflineError(OSError):
+    """Raised when a connect-phase failure indicates no network connectivity."""
+
+class DownloadCancelled(Exception):
+    """Raised when a cancel_event is set mid-stream."""
+
+class DownloadError(Exception):
+    """Raised for permanent download failures (e.g. SSL cert verification)."""
+
+class PlatformUnsupported(Exception):
+    """Raised when a function is not available on the current platform."""
+
+# Remedy hint carried in DownloadError when TLS verification fails on Linux.
+CA_CERTS_MISSING = "sudo apt install ca-certificates"
+
+# Module-level sleep for backoff — injectable in tests.
+def _sleep(seconds: float) -> None:  # noqa: D401
+    time.sleep(seconds)
+
+# Backoff schedule (seconds) for mid-stream retries.
+_RETRY_BACKOFFS: tuple[int, ...] = (1, 2, 4)
+
 
 def _ssl_ctx() -> ssl.SSLContext:
-    """建立 SSL Context，優先序：certifi bundle → 系統預設 → 不驗證（fallback）。
+    """Return an SSL context.
 
-    PyInstaller EXE 中 Python 的 CA bundle 路徑常失效，
-    certifi 套件自帶 Mozilla cacert.pem，是最可靠的修法。
-    若兩者都不可用，才退回「不驗證」模式（只用於可信任的 HuggingFace URL）。
+    Windows (frozen EXE): certifi → system default → CERT_NONE fallback.
+    Non-win32 (source install): certifi → system default.  Never CERT_NONE.
+    An SSLCertVerificationError is surfaced to the caller — _download_file
+    converts it to DownloadError with the CA_CERTS_MISSING remedy.
     """
-    # 優先：certifi 套件的 CA bundle
-    try:
-        import certifi
-        return ssl.create_default_context(cafile=certifi.where())
-    except Exception:
-        pass
-    # 次選：系統預設（開發環境通常正常）
-    try:
+    if sys.platform == "win32":
+        # Existing Windows behaviour: three rungs including CERT_NONE.
+        try:
+            import certifi
+            return ssl.create_default_context(cafile=certifi.where())
+        except Exception:
+            pass
+        try:
+            return ssl.create_default_context()
+        except Exception:
+            pass
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode    = ssl.CERT_NONE
+        return ctx
+    else:
+        # Non-win32: certifi bundle preferred, system trust as fallback.
+        # CERT_NONE is never used — a source install has working system CAs.
+        try:
+            import certifi
+            return ssl.create_default_context(cafile=certifi.where())
+        except Exception:
+            pass
         return ssl.create_default_context()
-    except Exception:
-        pass
-    # 最後降級：不驗證（frozen EXE CA bundle 完全缺失時）
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.check_hostname = False
-    ctx.verify_mode    = ssl.CERT_NONE
-    return ctx
 
 # ── 路徑（PyInstaller 凍結時指向 EXE 旁邊）────────────────────────────
 import sys as _sys
@@ -145,6 +183,30 @@ REQUIRED_OTHER: list[str] = [
 def _get_paths(model_dir: Path) -> tuple[Path, Path]:
     """回傳 (ov_dir, vad_path)。"""
     return model_dir / "qwen3_asr_int8", model_dir / "silero_vad_v4.onnx"
+
+
+def ensure_vad(model_dir: Path, progress_cb=None) -> None:
+    """Ensure the silero VAD model is present in model_dir.
+
+    Shared prerequisite for both the 0.6B and 1.7B download paths.
+    Downloads silero_vad_v4.onnx from GitHub if missing; no-ops if present.
+    progress_cb(pct: float, msg: str)
+    """
+    model_dir = Path(model_dir)
+    _, vad_path = _get_paths(model_dir)
+    if _file_is_real(vad_path):
+        return
+    vad_path.parent.mkdir(parents=True, exist_ok=True)
+    if progress_cb:
+        progress_cb(0.0, "下載 VAD 模型…")
+
+    def _cb(done: int, total: int):
+        if progress_cb and total > 0:
+            progress_cb(done / total, f"下載 VAD… {done / 1_048_576:.1f} MB")
+
+    _download_file(_VAD_URL, vad_path, progress_cb=_cb)
+    if progress_cb:
+        progress_cb(1.0, "VAD 模型就緒")
 
 
 # ── Git LFS 指標檔偵測 ────────────────────────────────────────────────
@@ -259,7 +321,14 @@ def download_diarization(diar_dir: Path, progress_cb=None):
 
 
 def quick_check_1p7b(model_dir: Path) -> bool:
-    """快速檢查 1.7B KV-cache INT8 模型是否完整（非 LFS pointer）。"""
+    """快速檢查 1.7B KV-cache INT8 模型是否完整（非 LFS pointer）。
+
+    VAD is a shared prerequisite; returns False when VAD is absent.
+    .part sidecar files are ignored — only files at their final name count.
+    """
+    _, vad_path = _get_paths(model_dir)
+    if not _file_is_real(vad_path):
+        return False
     kv_dir = model_dir / "qwen3_asr_1p7b_kv_int8"
     for fname in _1P7B_REQUIRED_BIN + _1P7B_REQUIRED_OTHER:
         if not _file_is_real(kv_dir / fname):
@@ -273,6 +342,9 @@ def download_1p7b(model_dir: Path, progress_cb=None):
     progress_cb(pct: float, msg: str)   pct ∈ [0, 1]
     下載失敗時拋出例外。
     """
+    # VAD is a shared prerequisite for both model sizes.
+    ensure_vad(model_dir, progress_cb)
+
     kv_dir = model_dir / "qwen3_asr_1p7b_kv_int8"
     kv_dir.mkdir(parents=True, exist_ok=True)
 
@@ -398,7 +470,14 @@ def download_ffmpeg(dest_dir: Path, progress_cb=None):
     """下載 ffmpeg.zip（HF）並解壓 ffmpeg.exe/ffprobe.exe 至 dest_dir（扁平化）。
 
     progress_cb(pct: float, msg: str)。仿 download_crispasr_core 的流程。
+    Only available on Windows; raises PlatformUnsupported on other platforms.
     """
+    if sys.platform != "win32":
+        raise PlatformUnsupported(
+            "download_ffmpeg downloads a Windows binary and is not available on "
+            f"{sys.platform}. Install ffmpeg via your package manager instead."
+        )
+
     import shutil
     import tempfile
     import zipfile
@@ -637,7 +716,11 @@ def _sha256(path: Path, progress_cb=None) -> str:
 
 
 def quick_check(model_dir: Path) -> bool:
-    """快速存在性檢查（排除 Git LFS pointer，不計算雜湊）。"""
+    """快速存在性檢查（排除 Git LFS pointer，不計算雜湊）。
+
+    .part sidecar files created by _download_file are ignored — only files
+    at their final names count as present.
+    """
     ov_dir, vad_path = _get_paths(model_dir)
     if not _file_is_real(vad_path):
         return False
@@ -679,15 +762,29 @@ def full_verify(model_dir: Path, progress_cb=None) -> tuple[bool, str]:
 # 直接 HTTP 下載（斷點續傳）
 # ══════════════════════════════════════════════════════════════════════
 
-def _download_file(url: str, dest: Path, progress_cb=None):
-    """
-    下載單一檔案至 dest，支援斷點續傳（Resume）。
-    progress_cb(done_bytes: int, total_bytes: int)
-    """
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    existing = dest.stat().st_size if dest.exists() else 0
+def _is_offline_error(exc: urllib.error.URLError) -> bool:
+    """Return True if exc indicates no network (DNS/EHOSTUNREACH/ECONNREFUSED)."""
+    reason = exc.reason
+    if isinstance(reason, socket.gaierror):
+        return True
+    if isinstance(reason, ConnectionRefusedError):
+        return True
+    if isinstance(reason, OSError) and getattr(reason, "errno", None) in (
+        errno.ENETUNREACH, errno.EHOSTUNREACH
+    ):
+        return True
+    return False
 
-    url = _apply_mirror(url)   # 套用鏡像站改寫（若有設定）
+
+def _download_attempt(
+    url: str,
+    part_path: Path,
+    progress_cb,
+    cancel_event,
+) -> None:
+    """One HTTP download attempt into part_path (append or overwrite)."""
+    existing = part_path.stat().st_size if part_path.exists() else 0
+
     req = urllib.request.Request(url, headers={"User-Agent": _UA})
     if existing > 0:
         req.add_header("Range", f"bytes={existing}-")
@@ -696,21 +793,41 @@ def _download_file(url: str, dest: Path, progress_cb=None):
         resp = urllib.request.urlopen(req, timeout=30, context=_ssl_ctx())
     except urllib.error.HTTPError as e:
         if e.code == 416:
-            # 416 Range Not Satisfiable = 檔案已完整，直接視為成功
+            # 416 Range Not Satisfiable → the server considers the file complete.
             return
+        raise
+    except ssl.SSLCertVerificationError as exc:
+        raise DownloadError(
+            f"SSL certificate verification failed. Fix: {CA_CERTS_MISSING}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        # Unwrap SSLCertVerificationError that arrives wrapped in URLError.
+        if isinstance(exc.reason, ssl.SSLCertVerificationError):
+            raise DownloadError(
+                f"SSL certificate verification failed. Fix: {CA_CERTS_MISSING}"
+            ) from exc
+        if _is_offline_error(exc):
+            raise OfflineError(str(exc.reason)) from exc
         raise
 
     content_length = int(resp.headers.get("Content-Length", 0))
-    total = existing + content_length if content_length else 0
 
-    # 追加寫入（resume）或全新寫入
-    mode = "ab" if existing > 0 and resp.status == 206 else "wb"
-    if mode == "wb":
-        existing = 0
+    if resp.status == 206:
+        # Server honoured the Range header — append to the existing partial.
+        total = existing + content_length if content_length else 0
+        mode = "ab"
+        done = existing
+    else:
+        # Server ignored Range (sent 200) — restart from zero.
+        total = content_length
+        mode = "wb"
+        done = 0
 
-    done = existing
-    with open(dest, mode) as f:
+    with open(part_path, mode) as f:
         while True:
+            if cancel_event is not None and cancel_event.is_set():
+                resp.close()
+                raise DownloadCancelled("Download cancelled by caller")
             chunk = resp.read(1 << 16)   # 64 KB
             if not chunk:
                 break
@@ -720,6 +837,72 @@ def _download_file(url: str, dest: Path, progress_cb=None):
                 progress_cb(done, total)
 
     resp.close()
+
+
+def _download_file(url: str, dest: Path, progress_cb=None, cancel_event=None):
+    """Stream url into dest, using a .part sidecar while in-flight.
+
+    Behaviour
+    ---------
+    * Writes to ``dest.parent / (dest.name + ".part")`` while downloading.
+    * On success: ``os.replace(part_path, dest)`` — atomic on POSIX.
+    * Resumes from an existing .part via a ``Range`` header; falls back to a
+      full download if the server returns 200 instead of 206.
+    * A file at its final name is complete by construction — callers should use
+      ``_file_is_real`` to skip downloads for already-complete files.
+    * cancel_event: if set between chunk writes, raises ``DownloadCancelled``
+      and keeps the .part for later resumption.
+    * Retry policy
+        - Mid-stream errors (IncompleteRead, socket.timeout, ConnectionResetError,
+          HTTP 5xx): retry 3 times with backoff ``_RETRY_BACKOFFS`` (injectable
+          via the module-level ``_sleep``), resuming from the .part each time.
+        - Connect-phase errors (URLError wrapping socket.gaierror /
+          ConnectionRefusedError / ENETUNREACH / EHOSTUNREACH): raise
+          ``OfflineError`` immediately with no retry.
+
+    progress_cb(done_bytes: int, total_bytes: int)
+    """
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part_path = dest.parent / (dest.name + ".part")
+
+    url = _apply_mirror(url)   # 套用鏡像站改寫（若有設定）
+
+    _MID_STREAM = (
+        http.client.IncompleteRead,
+        socket.timeout,
+        ConnectionResetError,
+    )
+
+    attempt = 0
+    while True:
+        try:
+            _download_attempt(url, part_path, progress_cb, cancel_event)
+            break  # success
+        except DownloadCancelled:
+            # .part survives; propagate immediately.
+            raise
+        except OfflineError:
+            # Connect-phase failure — propagate immediately, no retry.
+            raise
+        except DownloadError:
+            raise
+        except urllib.error.HTTPError as exc:
+            if 500 <= exc.code < 600:
+                if attempt >= len(_RETRY_BACKOFFS):
+                    raise
+                _sleep(_RETRY_BACKOFFS[attempt])
+                attempt += 1
+            else:
+                raise
+        except _MID_STREAM as exc:
+            if attempt >= len(_RETRY_BACKOFFS):
+                raise DownloadError(str(exc)) from exc
+            _sleep(_RETRY_BACKOFFS[attempt])
+            attempt += 1
+
+    # Atomic rename: only reachable on success.
+    os.replace(part_path, dest)
 
 
 def _download_file_with_fallback(

@@ -48,7 +48,16 @@ def find_cloudflared() -> Path | None:
 
 
 def download_cloudflared(progress_cb=None) -> Path:
-    """下載官方 cloudflared.exe 到 <app>/cloudflared/。progress_cb(frac, msg)。"""
+    """下載官方 cloudflared.exe 到 <app>/cloudflared/。progress_cb(frac, msg)。
+
+    Only available on Windows; raises PlatformUnsupported on other platforms.
+    """
+    if sys.platform != "win32":
+        from downloader import PlatformUnsupported
+        raise PlatformUnsupported(
+            "download_cloudflared downloads a Windows binary and is not available on "
+            f"{sys.platform}. Install cloudflared via your package manager instead."
+        )
     try:
         import certifi
         ctx = ssl.create_default_context(cafile=certifi.where())
