@@ -41,6 +41,8 @@
     "file.hintPh": ["例如：本段為產品行銷 Podcast，會出現「轉換率」「漏斗」等行銷術語…", "例如：本段为产品营销 Podcast，会出现“转化率”“漏斗”等营销术语…", "e.g. This is a marketing podcast with terms like 'conversion rate', 'funnel'…"],
     "file.loadTxt": ["讀入 TXT…", "读入 TXT…", "Load TXT…"],
     "file.resultTitle": ["辨識結果", "识别结果", "Result"],
+    "sub.edit": ["編輯此行（Shift+Enter 分行）", "编辑此行（Shift+Enter 分行）", "Edit line (Shift+Enter to split)"],
+    "sub.mergeNext": ["與下一行合併", "与下一行合并", "Merge with next line"],
     "common.langAuto": ["語言 自動", "语言 自动", "Lang Auto"],
     "common.spkAuto": ["人數 自動", "人数 自动", "Count Auto"],
 

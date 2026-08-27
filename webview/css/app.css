@@ -426,19 +426,21 @@ textarea.input { resize: vertical; min-height: 64px; font-size: 13px; line-heigh
 .sub-card.spkc-3 { border-left-color: #8A6312; }
 
 /* 行內校對：每行右側的小筆 + 編輯態 */
-.sub-edit {
+.sub-edit, .sub-merge {
   flex: 0 0 auto; width: 26px; height: 26px; margin-top: -1px;
   border-radius: 7px; border: 1px solid transparent; background: transparent;
   color: var(--faint); cursor: pointer; display: grid; place-items: center;
   opacity: 0; transition: opacity .12s, background .12s, color .12s, border-color .12s;
 }
-.sub-card:hover .sub-edit, .sub-card.editing .sub-edit { opacity: 1; }
-.sub-edit:hover { background: var(--accent-tint); color: var(--accent-strong); border-color: var(--accent-soft); }
-.sub-edit svg { width: 14px; height: 14px; }
+.sub-card:hover .sub-edit, .sub-card.editing .sub-edit,
+.sub-card:hover .sub-merge, .sub-card.editing .sub-merge { opacity: 1; }
+.sub-edit:hover, .sub-merge:hover { background: var(--accent-tint); color: var(--accent-strong); border-color: var(--accent-soft); }
+.sub-edit svg, .sub-merge svg { width: 14px; height: 14px; }
 .sub-card.editing { background: var(--panel-2); }
 .sub-card .txt[contenteditable="true"] {
   outline: none; background: var(--panel); border-radius: 6px;
   padding: 2px 7px; margin: -2px -7px; box-shadow: 0 0 0 2px var(--accent-soft);
+  white-space: pre-wrap;
 }
 
 /* 記錄 log */
