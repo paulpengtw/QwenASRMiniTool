@@ -292,6 +292,16 @@ class WebViewServer:
                     pass
                 finally:
                     server.hub.unsubscribe(q)
+                    # Ticket 08 — recording capture-client disconnect:
+                    # job_registry.py is in the tree; notify the backend so
+                    # it can call registry.capture_client_closed(job_id) to
+                    # retain segments and complete the recording job
+                    # (decision doc 02: capture ends with its client,
+                    # segments retained).
+                    try:
+                        server.backend.on_sse_client_disconnected()
+                    except Exception:
+                        pass
 
             # ── 轉錄（multipart 上傳）─────────────────────────
             def _transcribe(self):

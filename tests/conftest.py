@@ -40,8 +40,45 @@ def _make_app_stub():
 if "app" not in sys.modules:
     sys.modules["app"] = _make_app_stub()
 
-# Stub other problematic imports that webview_backend may pull in
-for _mod in ("customtkinter", "tkinter", "tkinter.filedialog",
-             "pywebview", "webview"):
+# Stub other problematic imports that webview_backend may pull in.
+# customtkinter needs a richer stub so ffmpeg_utils.py can define
+# FFmpegDownloadDialog(ctk.CTkToplevel) at import time without AttributeError.
+def _make_ctk_stub():
+    """Return a customtkinter stub with the ctk widget base classes needed."""
+    ctk = types.ModuleType("customtkinter")
+
+    class _Base:
+        def __init__(self, *a, **kw): pass
+        def pack(self, *a, **kw): pass
+        def configure(self, *a, **kw): pass
+        def after(self, *a, **kw): pass
+        def destroy(self): pass
+        def grab_set(self): pass
+        def deiconify(self): pass
+        def lift(self): pass
+        def focus_force(self): pass
+        def protocol(self, *a, **kw): pass
+        def geometry(self, *a, **kw): pass
+        def resizable(self, *a, **kw): pass
+        def title(self, *a, **kw): pass
+        def set(self, *a, **kw): pass
+        def start(self, *a, **kw): pass
+        def stop(self, *a, **kw): pass
+
+    ctk.CTkToplevel = _Base
+    ctk.CTkLabel = _Base
+    ctk.CTkProgressBar = _Base
+    ctk.CTkButton = _Base
+    ctk.CTkFrame = _Base
+    ctk.CTkEntry = _Base
+    ctk.CTkTextbox = _Base
+    ctk.CTkScrollableFrame = _Base
+    return ctk
+
+
+if "customtkinter" not in sys.modules:
+    sys.modules["customtkinter"] = _make_ctk_stub()
+
+for _mod in ("tkinter", "tkinter.filedialog", "pywebview", "webview"):
     if _mod not in sys.modules:
         sys.modules[_mod] = types.ModuleType(_mod)
