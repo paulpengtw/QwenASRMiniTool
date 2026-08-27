@@ -36,19 +36,32 @@ def _base_dir() -> Path:
 
 
 def find_cloudflared() -> Path | None:
-    """找本機 cloudflared：系統 PATH → App 目錄 → 常見安裝路徑。"""
-    which = shutil.which("cloudflared")
-    if which:
-        return Path(which)
-    for c in (_base_dir() / "cloudflared" / "cloudflared.exe",
-              Path("C:/Program Files (x86)/cloudflared/cloudflared.exe")):
-        if c.exists():
-            return c
+    """找本機 cloudflared：系統 PATH → App 目錄 → 常見安裝路徑。
+
+    Delegates to platform_seams.find_executable (PATH first).  Never downloads.
+    """
+    from platform_seams import find_executable
+    result = find_executable("cloudflared",
+                             extra_dirs=[_base_dir() / "cloudflared"])
+    if result:
+        return result
+    # Legacy win32 fallback path
+    if sys.platform == "win32":
+        for c in (Path("C:/Program Files (x86)/cloudflared/cloudflared.exe"),):
+            if c.exists():
+                return c
     return None
 
 
 def download_cloudflared(progress_cb=None) -> Path:
-    """下載官方 cloudflared.exe 到 <app>/cloudflared/。progress_cb(frac, msg)。"""
+    """下載官方 cloudflared.exe 到 <app>/cloudflared/。progress_cb(frac, msg)。
+
+    Raises PlatformUnsupported on non-win32 (Linux discovers cloudflared on PATH).
+    """
+    if sys.platform != "win32":
+        from platform_seams import PlatformUnsupported
+        raise PlatformUnsupported(
+            "download_cloudflared is Windows-only; on Linux, install cloudflared via PATH")
     try:
         import certifi
         ctx = ssl.create_default_context(cafile=certifi.where())
@@ -134,12 +147,12 @@ class CloudflareTunnel:
         except Exception:
             pass
 
-        proc = subprocess.Popen(
+        from platform_seams import spawn as _spawn
+        proc = _spawn(
             [str(cf), "--config", str(empty_cfg), "tunnel",
              "--url", f"http://127.0.0.1:{port}", "--no-autoupdate"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace",
-            creationflags=_NO_WINDOW,
         )
         with self._lock:
             self._proc = proc

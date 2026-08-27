@@ -698,12 +698,11 @@ class WebBackend:
         return True
 
     def open_output_dir(self) -> bool:
-        import os
+        from platform_seams import open_path
         try:
             d = getattr(core, "SRT_DIR", BASE_DIR / "subtitles")
             Path(d).mkdir(parents=True, exist_ok=True)
-            os.startfile(str(d))
-            return True
+            return open_path(str(d))
         except Exception:
             return False
 

@@ -42,29 +42,33 @@ def is_video(path: Path) -> bool:
 
 
 def find_ffmpeg() -> Path | None:
-    """按順序搜尋 ffmpeg：系統 PATH → App 目錄 → 常見安裝路徑。"""
-    # 1. 系統 PATH
-    which = shutil.which("ffmpeg")
-    if which:
-        return Path(which)
+    """按順序搜尋 ffmpeg：系統 PATH → App 目錄 → 常見安裝路徑。
+
+    Delegates PATH search to platform_seams.find_executable (PATH first,
+    then extra_dirs).  Never downloads.
+    """
+    from platform_seams import find_executable, app_dir
+
+    # 1. PATH (and win32 .exe suffix via find_executable)
+    result = find_executable("ffmpeg")
+    if result:
+        return result
 
     # 2. App 目錄下的 ffmpeg/ 子目錄（EXE 模式 or 原始碼模式）
-    if getattr(sys, "frozen", False):
-        base = Path(sys.executable).parent
-    else:
-        base = Path(__file__).parent
-    local = base / "ffmpeg" / "ffmpeg.exe"
-    if local.exists():
-        return local
+    base = app_dir()
+    result = find_executable("ffmpeg", extra_dirs=[base / "ffmpeg"])
+    if result:
+        return result
 
-    # 3. 常見 Windows 安裝路徑
-    for candidate in [
-        Path("C:/ffmpeg/bin/ffmpeg.exe"),
-        Path("C:/Program Files/ffmpeg/bin/ffmpeg.exe"),
-        Path("C:/Program Files (x86)/ffmpeg/bin/ffmpeg.exe"),
-    ]:
-        if candidate.exists():
-            return candidate
+    # 3. 常見 Windows 安裝路徑 (kept for backward-compat)
+    if sys.platform == "win32":
+        for candidate in [
+            Path("C:/ffmpeg/bin/ffmpeg.exe"),
+            Path("C:/Program Files/ffmpeg/bin/ffmpeg.exe"),
+            Path("C:/Program Files (x86)/ffmpeg/bin/ffmpeg.exe"),
+        ]:
+            if candidate.exists():
+                return candidate
 
     return None
 
@@ -330,11 +334,21 @@ def ensure_ffmpeg(
 
     on_ready(ffmpeg_path) 在 ffmpeg 就緒後（無論本來就有或剛下載）呼叫。
     on_fail() 在使用者取消下載時呼叫（可為 None）。
+
+    On non-win32, downloading is not supported; raises PlatformUnsupported when
+    ffmpeg is not found on PATH.  Install ffmpeg via the system package manager.
     """
     ffmpeg = find_ffmpeg()
     if ffmpeg:
         on_ready(ffmpeg)
         return
+
+    if sys.platform != "win32":
+        from platform_seams import PlatformUnsupported
+        raise PlatformUnsupported(
+            "ffmpeg not found on PATH; on Linux install it via: "
+            "sudo apt install ffmpeg"
+        )
 
     # 沒有 ffmpeg → 詢問是否下載
     from tkinter import messagebox
