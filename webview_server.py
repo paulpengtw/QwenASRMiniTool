@@ -103,6 +103,10 @@ class WebViewServer:
         self.hub = _EventHub()
         self.backend = WebBackend(on_event=self.hub.publish)
         self.registry = JobRegistry()
+        # Wire the registry to the backend so on_sse_client_disconnected() can
+        # call capture_client_closed() when a recording SSE client drops.
+        # (Gap fix: _job_registry was never assigned, so reg was always None.)
+        self.backend._job_registry = self.registry
         # Publish registry events as SSE "job" events
         self.registry.subscribe(
             lambda ev, payload: self.hub.publish("job", {"event": ev, "payload": payload})
