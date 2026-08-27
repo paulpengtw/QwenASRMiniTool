@@ -223,6 +223,13 @@ class WebViewServer:
                     })
                 if path == "/api/jobs":
                     return self._json(server.registry.snapshot())
+                if path.startswith("/api/jobs/"):
+                    job_id = path[len("/api/jobs/"):]
+                    if "/" not in job_id and job_id:
+                        try:
+                            return self._json(server.registry.get_job(job_id))
+                        except KeyError:
+                            return self._err(404, "job not found")
                 if path == "/api/events":
                     return self._sse()
                 if path.startswith("/api/"):

@@ -485,6 +485,18 @@ class JobRegistry:
     # Snapshot
     # ------------------------------------------------------------------
 
+    def get_job(self, job_id: str) -> Dict[str, Any]:
+        """
+        Return a JSON-serialisable dict for a single job.
+
+        Raises
+        ------
+        KeyError
+            If *job_id* is not known.
+        """
+        with self._lock:
+            return self._jobs[job_id].to_dict()
+
     def snapshot(self) -> Dict[str, Any]:
         """
         Return a JSON-serialisable dict representing the full session history.
