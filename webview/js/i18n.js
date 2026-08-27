@@ -116,6 +116,15 @@
     "set.lang": ["介面語言", "界面语言", "Language"],
     "set.appDesc": ["本地推理 · 資料不離開你的電腦", "本地推理 · 数据不离开你的电脑", "Local inference · data stays on your PC"],
     "set.checkUpdate": ["檢查更新", "检查更新", "Check update"],
+
+    // ── ticket 07: alignment capability UI strings ──────────────────────
+    "align.chipLabel":        ["字級時間軸：比例估算 ⓘ", "字级时间轴：比例估算 ⓘ", "Word-level timeline: proportional ⓘ"],
+    "align.chipTooltip":      ["精確字級對齊僅支援 Windows（chatllm ForcedAligner）。Ubuntu 上自動切換為比例估算。", "精确字级对齐仅支持 Windows（chatllm ForcedAligner）。Ubuntu 上自动切换为比例估算。", "Exact word-level alignment is Windows-only (chatllm ForcedAligner). On Ubuntu, proportional estimation is used automatically."],
+    "align.badge":            ["≈ 估算", "≈ 估算", "≈ est."],
+    "align.chunkDisabledReason": ["精確字級對齊在 Ubuntu 不可用；設定值已保留，切換至 Windows 時生效。", "精确字级对齐在 Ubuntu 不可用；设定值已保留，切换至 Windows 时生效。", "Exact alignment unavailable on Ubuntu; setting preserved for Windows."],
+    "align.unsupportedGroup": ["Not supported on Ubuntu / Ubuntu 不支援", "Not supported on Ubuntu / Ubuntu 不支援", "Not supported on Ubuntu / Ubuntu 不支援"],
+    "align.faLabel":          ["精確字級對齊（ForcedAligner）", "精确字级对齐（ForcedAligner）", "Exact word alignment (ForcedAligner)"],
+    "align.statusLine":       ["精確字級對齊在 Ubuntu 不可用 · Windows 設定已保留", "精确字级对齐在 Ubuntu 不可用 · Windows 设置已保留", "Exact word alignment unavailable on Ubuntu · Windows settings preserved"],
   };
 
   function idx() { return LOCALE === "hans" ? 1 : (LOCALE === "en" ? 2 : 0); }

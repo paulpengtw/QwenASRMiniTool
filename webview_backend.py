@@ -390,6 +390,7 @@ class WebBackend:
 
     # ── 狀態 ────────────────────────────────────────────────
     def get_status(self) -> dict:
+        from alignment_policy import alignment_capability
         active = getattr(self, "_active_backend", "openvino")
         return {
             "modelReady": bool(getattr(self.engine, "ready", False)),
@@ -405,6 +406,8 @@ class WebBackend:
             "hasAnyModel": self._has_any_model(),
             # 目前選擇的模型是否已就緒 → 前端決定開始頁（就緒=語音轉文字／否=模型頁等下載）
             "selectedReady": self.selected_model_present(),
+            # 字級時間軸對齊能力快照（ticket 07）
+            "alignment": alignment_capability(),
         }
 
     def selected_model_present(self) -> bool:
@@ -675,7 +678,14 @@ class WebBackend:
         CRISPASR：FA aligner gguf 已於 _load_crispasr 處理，這裡略過。
         OpenVINO/chatllm：需 chatllm ForcedAligner .bin（約 939 MB），缺則下載並
         重新載入引擎內的對齊器（eng._load_aligner）。回傳是否就緒。
+
+        非 win32 平台（Ubuntu 等）：精確字級對齊不可用（chatllm main.exe 僅
+        Windows），不下載任何檔案，直接回傳 False。（ticket 07）
         """
+        import sys as _sys
+        from alignment_policy import alignment_capability
+        if alignment_capability(platform=_sys.platform)["state"] == "platform_unsupported":
+            return False
         backend = getattr(self, "_active_backend", "openvino")
         if backend == "crispasr":
             return bool(getattr(self.engine, "_fa_bin", None))
